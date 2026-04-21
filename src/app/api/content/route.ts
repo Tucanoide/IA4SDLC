@@ -73,22 +73,37 @@ export async function GET(req: NextRequest) {
         });
       }
 
-      case 'use_cases':
-        result = await client.query(
-          `SELECT program_name, title, content_html, use_cases_json, generated_at
+      case 'use_cases': {
+        const ucRes = await client.query(
+          `SELECT id, program_name, title, content_html, use_cases_json, generated_at
            FROM cobol_analysis.use_cases
-           WHERE program_name = $1 ORDER BY generated_at DESC LIMIT 1`,
-          [pn]
+           ORDER BY generated_at DESC`
         );
-        break;
+        if (ucRes.rows.length === 0) return NextResponse.json({ error: 'not found' }, { status: 404 });
+        const cleanedRows = ucRes.rows.map((row) => {
+          if (!row.content_html) return row;
+          const raw = row.content_html as string;
+          const bodyMatch = raw.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+          const bodyContent = bodyMatch ? bodyMatch[1] : raw;
+          const cleaned = bodyContent
+            .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+            .replace(/\s*style="[^"]*"/gi, '')
+            .replace(/<h[1-4][^>]*>\s*[IÍ]ndice\s*<\/h[1-4]>[\s\S]*?(?=<h[1-4])/i, '')
+            .trim();
+          return { ...row, content_html: cleaned };
+        });
+        return NextResponse.json({ use_cases: cleanedRows });
+      }
 
-      case 'onboarding':
-        result = await client.query(
-          `SELECT chapter_order, chapter_key, title, estimated_minutes, content_html, generated_at
-           FROM cobol_analysis.onboarding_chapters
-           ORDER BY chapter_order ASC`
+      case 'onboarding': {
+        const obRes = await client.query(
+          `SELECT id, profile, version, chapter_count, content_md, generated_at
+           FROM cobol_analysis.onboarding_content
+           ORDER BY profile ASC`
         );
-        return NextResponse.json({ chapters: result.rows });
+        if (obRes.rows.length === 0) return NextResponse.json({ error: 'not found' }, { status: 404 });
+        return NextResponse.json({ onboarding_profiles: obRes.rows });
+      }
 
       case 'code_audit': {
         const runRes = await client.query(

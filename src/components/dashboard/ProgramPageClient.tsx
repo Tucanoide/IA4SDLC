@@ -18,6 +18,24 @@ export interface AuditFinding {
   raw_evidence?: string | null;
 }
 
+export interface UseCaseEntry {
+  id: number;
+  program_name?: string;
+  title?: string;
+  content_html?: string;
+  use_cases_json?: unknown;
+  generated_at?: string;
+}
+
+export interface OnboardingProfile {
+  id: number;
+  profile: string;
+  version: number;
+  chapter_count: number;
+  content_md: string;
+  generated_at: string;
+}
+
 export interface ContentData {
   content_html?: string;
   content_md?: string;
@@ -25,6 +43,8 @@ export interface ContentData {
   overall_score?: number;
   title?: string;
   chapters?: { chapter_order: number; title: string; estimated_minutes: number; content_html: string }[];
+  onboarding_profiles?: OnboardingProfile[];
+  use_cases?: UseCaseEntry[];
   // code_audit fields
   findings?: AuditFinding[];
   overall_quality?: string;
@@ -216,44 +236,209 @@ function HtmlContent({ html }: { html: string }) {
   );
 }
 
-// ── Onboarding Chapters ────────────────────────────────────────────────────
-function OnboardingChapters({ chapters }: { chapters: ContentData['chapters'] }) {
-  const [active, setActive] = useState(0);
-  if (!chapters?.length) return null;
-  const ch = chapters[active];
+// ── Onboarding View ────────────────────────────────────────────────────────
+interface ParsedChapter { title: string; body: string; }
+
+function parseChapters(md: string): ParsedChapter[] {
+  const parts = md.split(/^(?=## )/m).filter(Boolean);
+  // First part may be intro (h1 + description), skip if no ## prefix
+  return parts
+    .filter((p) => p.startsWith('## '))
+    .map((p) => {
+      const lines = p.split('\n');
+      const title = lines[0].replace(/^##\s*/, '').trim();
+      const body = lines.slice(1).join('\n').trim();
+      return { title, body };
+    });
+}
+
+const PROFILE_LABELS: Record<string, string> = {
+  functional: 'Funcional',
+  technical:  'Técnico',
+};
+
+const PROFILE_ICONS: Record<string, string> = {
+  functional: 'business_center',
+  technical:  'code',
+};
+
+function OnboardingView({ profiles }: { profiles: OnboardingProfile[] }) {
+  const [activeProfile, setActiveProfile] = useState(0);
+  const [activeChapter, setActiveChapter] = useState(0);
+
+  const profile = profiles[activeProfile];
+  const chapters = useMemo(() => parseChapters(profile.content_md), [profile]);
+
+  const chapter = chapters[activeChapter];
+
+  const handleProfileChange = (i: number) => {
+    setActiveProfile(i);
+    setActiveChapter(0);
+  };
+
   return (
-    <div className="flex gap-8">
-      {/* Chapter nav */}
-      <div className="w-64 flex-shrink-0">
-        <div className="glass-card rounded-[2rem] overflow-hidden p-2">
-          {chapters.map((c, i) => (
+    <div className="flex flex-col gap-6">
+      {/* Profile tabs */}
+      {profiles.length > 1 && (
+        <div className="flex gap-3">
+          {profiles.map((p, i) => (
             <button
-              key={c.chapter_order}
-              onClick={() => setActive(i)}
-              className={`w-full text-left px-5 py-4 flex items-start space-x-4 rounded-2xl transition-all duration-300 ${
-                i === active 
-                  ? 'bg-primary-container text-on-primary-container shadow-lg shadow-primary-container/20' 
-                  : 'text-on-surface-variant hover:bg-white/5 hover:text-on-surface'
+              key={p.id}
+              onClick={() => handleProfileChange(i)}
+              className={`flex items-center gap-2.5 px-5 py-2.5 rounded-2xl text-xs font-black uppercase tracking-widest transition-all duration-200 ${
+                i === activeProfile
+                  ? 'bg-primary-container text-on-primary-container shadow-lg'
+                  : 'glass-card text-on-surface-variant hover:text-on-surface hover:bg-white/5'
               }`}
             >
-              <span className="text-[10px] font-black mt-1 opacity-60 w-4">{String(c.chapter_order).padStart(2, '0')}</span>
-              <span className="text-xs font-bold leading-tight tracking-tight">{c.title}</span>
+              <span className="material-symbols-outlined text-base">
+                {PROFILE_ICONS[p.profile] ?? 'school'}
+              </span>
+              {PROFILE_LABELS[p.profile] ?? p.profile}
+              <span className="text-[10px] opacity-60 font-medium normal-case">
+                {p.chapter_count} cap.
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Main layout */}
+      <div className="flex gap-6" style={{ height: '72vh' }}>
+        {/* Chapter list */}
+        <div className="w-72 flex-shrink-0 flex flex-col glass-card rounded-[2rem] overflow-hidden">
+          <div className="px-5 py-4 border-b border-white/5 flex-shrink-0 flex items-center gap-2">
+            <span className="material-symbols-outlined text-primary text-base">menu_book</span>
+            <span className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant opacity-60">Capítulos</span>
+          </div>
+          <div className="flex-1 overflow-y-auto custom-scrollbar p-2">
+            {chapters.map((ch, i) => (
+              <button
+                key={i}
+                onClick={() => setActiveChapter(i)}
+                className={`w-full text-left px-4 py-3 rounded-xl flex items-start gap-3 transition-all duration-200 ${
+                  i === activeChapter
+                    ? 'bg-primary-container text-on-primary-container'
+                    : 'text-on-surface-variant hover:bg-white/5 hover:text-on-surface'
+                }`}
+              >
+                <span className="text-[10px] font-black opacity-50 mt-0.5 w-5 flex-shrink-0">
+                  {String(i + 1).padStart(2, '0')}
+                </span>
+                <span className="text-xs font-bold leading-snug tracking-tight">{ch.title}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Chapter content */}
+        <div className="flex-1 glass-card rounded-[2.5rem] flex flex-col overflow-hidden">
+          <div className="px-10 py-6 border-b border-white/5 flex-shrink-0">
+            <h2 className="text-xl font-black text-on-surface tracking-tighter">{chapter?.title}</h2>
+          </div>
+          <div className="flex-1 overflow-y-auto custom-scrollbar px-10 py-8">
+            {chapter && (
+              <div className="prose-cobol">
+                <ReactMarkdown>{chapter.body}</ReactMarkdown>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Use Cases View ─────────────────────────────────────────────────────────
+function UseCasesView({ entries }: { entries: UseCaseEntry[] }) {
+  const [activeId, setActiveId] = useState('');
+  const [toc, setToc] = useState<{ id: string; text: string; level: number }[]>([]);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const headingEls = useRef<Map<string, HTMLElement>>(new Map());
+
+  const combinedHtml = entries.map((e) => e.content_html || '').join('\n');
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    headingEls.current.clear();
+    const headings = Array.from(container.querySelectorAll('h2, h3, h4'));
+    const items = headings.map((h, i) => {
+      const id = `uc-h-${i}`;
+      (h as HTMLElement).setAttribute('id', id);
+      headingEls.current.set(id, h as HTMLElement);
+      return { id, text: h.textContent?.trim() ?? '', level: parseInt(h.tagName[1]) };
+    });
+    setToc(items);
+    if (items.length) setActiveId(items[0].id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [combinedHtml]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !toc.length) return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        const visible = entries.find((e) => e.isIntersecting);
+        if (visible) setActiveId(visible.target.id);
+      },
+      { root: container, rootMargin: '0px 0px -60% 0px', threshold: 0 }
+    );
+    toc.forEach((item) => {
+      const h = headingEls.current.get(item.id);
+      if (h) obs.observe(h);
+    });
+    return () => obs.disconnect();
+  }, [toc]);
+
+  const scrollTo = (id: string) => {
+    const container = containerRef.current;
+    const el = headingEls.current.get(id);
+    if (!container || !el) return;
+    const top = el.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop - 16;
+    container.scrollTo({ top, behavior: 'smooth' });
+    setActiveId(id);
+  };
+
+  if (!entries.length) return null;
+
+  return (
+    <div className="flex gap-6" style={{ height: '75vh' }}>
+      {/* Index */}
+      <div className="w-72 flex-shrink-0 flex flex-col glass-card rounded-[2rem] overflow-hidden">
+        <div className="px-5 py-4 border-b border-white/5 flex-shrink-0 flex items-center gap-2">
+          <span className="material-symbols-outlined text-primary text-base">toc</span>
+          <span className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant opacity-60">Índice</span>
+        </div>
+        <div className="flex-1 overflow-y-auto custom-scrollbar p-2">
+          {toc.map((item) => (
+            <button
+              key={item.id}
+              onClick={() => scrollTo(item.id)}
+              className={`w-full text-left rounded-xl transition-all duration-200 ${
+                activeId === item.id
+                  ? 'bg-primary-container text-on-primary-container'
+                  : 'text-on-surface-variant hover:bg-white/5 hover:text-on-surface'
+              } ${
+                item.level === 2
+                  ? 'px-4 py-2.5 text-xs font-black'
+                  : item.level === 3
+                  ? 'px-6 py-2 text-xs font-semibold'
+                  : 'px-8 py-1.5 text-[11px] font-medium opacity-80'
+              }`}
+            >
+              {item.text}
             </button>
           ))}
         </div>
       </div>
-      {/* Chapter content */}
-      <div className="flex-1 glass-card rounded-[2.5rem] p-10 max-h-[75vh] overflow-y-auto custom-scrollbar">
-        <div className="flex items-center justify-between mb-8 border-b border-white/5 pb-6">
-          <h2 className="text-2xl font-black text-on-surface tracking-tighter">{ch.title}</h2>
-          {ch.estimated_minutes > 0 && (
-            <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-white/5 border border-white/5 text-[10px] uppercase font-bold text-on-surface-variant">
-              <span className="material-symbols-outlined text-sm">schedule</span>
-              {ch.estimated_minutes} min sync
-            </div>
-          )}
-        </div>
-        <HtmlContent html={ch.content_html} />
+
+      {/* Content */}
+      <div
+        ref={containerRef}
+        className="flex-1 glass-card rounded-[2.5rem] px-12 py-10 overflow-y-auto custom-scrollbar"
+      >
+        <div className="prose-cobol" dangerouslySetInnerHTML={{ __html: combinedHtml }} />
       </div>
     </div>
   );
@@ -647,8 +832,10 @@ export default function ProgramPageClient({
             <MetricsPanel content={content} contentType={contentType} />
           ) : content.findings ? (
             <CodeAuditFindings content={content} />
-          ) : content.chapters ? (
-            <OnboardingChapters chapters={content.chapters} />
+          ) : content.onboarding_profiles ? (
+            <OnboardingView profiles={content.onboarding_profiles} />
+          ) : content.use_cases ? (
+            <UseCasesView entries={content.use_cases} />
           ) : content.content_md ? (
             <div className="glass-card rounded-[3rem] p-12 max-h-[80vh] overflow-y-auto custom-scrollbar shadow-2xl">
               <MarkdownContent md={content.content_md} />

@@ -81,6 +81,12 @@ export async function GET(req: NextRequest) {
       } else if (content_type === 'functional_doc_system') {
         const exists = await client.query(`SELECT 1 FROM cobol_analysis.system_functional_overview LIMIT 1`);
         if (exists.rows.length > 0) return NextResponse.json({ status: 'completed' });
+      } else if (content_type === 'use_cases') {
+        const exists = await client.query(`SELECT 1 FROM cobol_analysis.use_cases LIMIT 1`);
+        if (exists.rows.length > 0) return NextResponse.json({ status: 'completed' });
+      } else if (content_type === 'onboarding' || content_type === 'onboarding_functional') {
+        const exists = await client.query(`SELECT 1 FROM cobol_analysis.onboarding_content LIMIT 1`);
+        if (exists.rows.length > 0) return NextResponse.json({ status: 'completed' });
       }
 
       return NextResponse.json({ status: 'not_found' });
