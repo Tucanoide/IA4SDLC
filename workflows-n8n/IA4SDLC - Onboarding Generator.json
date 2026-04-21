@@ -1,0 +1,285 @@
+{
+  "name": "IA4SDLC - Onboarding Generator",
+  "nodes": [
+    {
+      "id": "ob-note-00",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-1200, -320],
+      "parameters": {
+        "content": "## IA4SDLC - Onboarding Generator\n\n**Genera contenido de onboarding para dos perfiles:**\n- `functional`: analistas de negocio\n- `technical`: desarrolladores/mantenedores\n\n**Fuentes:**\n- use_cases_json (ya generado)\n- programs + technical_docs\n- files + db2\n\n**Output:** tabla `onboarding_content`\n\n**Llamada:**\n```\nPOST /webhook/ia4sdlc-onboarding\n{}\n```\n\n**LLMs en paralelo.** Programas con\ncollapsible nativo HTML (details/summary).",
+        "height": 280,
+        "width": 380,
+        "color": 7
+      }
+    },
+    {
+      "id": "ob-node-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [-1200, 80],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ia4sdlc-onboarding",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "ob-node-02",
+      "name": "Marca In Progress",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-960, 80],
+      "alwaysOutputData": true,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE cobol_analysis.content_generation_status\nSET status = 'in_progress', n8n_execution_id = '{{ $execution.id }}', updated_at = NOW()\nWHERE scope = 'system'\n  AND content_type IN ('onboarding_functional', 'onboarding_technical')",
+        "options": {}
+      }
+    },
+    {
+      "id": "ob-node-03",
+      "name": "Carga Use Cases",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-720, 80],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT use_cases_json, generated_at\nFROM cobol_analysis.use_cases\nWHERE uc_code = 'SYSTEM'\nORDER BY generated_at DESC\nLIMIT 1",
+        "options": {}
+      }
+    },
+    {
+      "id": "ob-node-04",
+      "name": "Carga Programas y TechDocs",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-480, 80],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  p.program_name,\n  p.metadata->>'description'      AS description,\n  p.metadata->>'complexity_score' AS complexity_score,\n  p.metadata->>'file_references'  AS calls_json,\n  pv.line_count,\n  td.content_md                   AS tech_doc\nFROM cobol_analysis.programs p\nJOIN LATERAL (\n  SELECT line_count\n  FROM   cobol_analysis.program_versions\n  WHERE  program_id = p.id\n  ORDER  BY version_number DESC\n  LIMIT  1\n) pv ON true\nLEFT JOIN LATERAL (\n  SELECT content_md\n  FROM   cobol_analysis.technical_docs\n  WHERE  program_name = p.program_name\n  ORDER  BY generated_at DESC\n  LIMIT  1\n) td ON true\nWHERE p.program_type = 'CBL'\nORDER BY (p.metadata->>'complexity_score')::numeric DESC NULLS LAST",
+        "options": {}
+      }
+    },
+    {
+      "id": "ob-node-05",
+      "name": "Carga Archivos y DB2",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-240, 80],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  'file'                                    AS tipo,\n  fa.physical_name                          AS nombre,\n  fa.organization                           AS organization,\n  fa.access_mode                            AS access_mode,\n  string_agg(DISTINCT p.program_name, ', ') AS programas\nFROM cobol_analysis.file_accesses fa\nJOIN cobol_analysis.program_versions pv ON pv.id = fa.version_id\nJOIN cobol_analysis.programs p ON p.id = pv.program_id\nGROUP BY fa.physical_name, fa.organization, fa.access_mode\n\nUNION ALL\n\nSELECT\n  'db2',\n  COALESCE(da.schema_name,'') || '.' || da.table_name,\n  array_to_string(da.operations, ','),\n  '',\n  string_agg(DISTINCT p.program_name, ', ')\nFROM cobol_analysis.db2_accesses da\nJOIN cobol_analysis.program_versions pv ON pv.id = da.version_id\nJOIN cobol_analysis.programs p ON p.id = pv.program_id\nGROUP BY da.schema_name, da.table_name, da.operations",
+        "options": {}
+      }
+    },
+    {
+      "id": "ob-node-06",
+      "name": "Prepara Contextos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [0, 80],
+      "parameters": {
+        "jsCode": "const ucRow      = $('Carga Use Cases').first().json;\nconst programs   = $('Carga Programas y TechDocs').all().map(i => i.json);\nconst filesDb2   = $('Carga Archivos y DB2').all().map(i => i.json);\n\n// Parse use cases\nlet ucData = {};\ntry {\n  ucData = typeof ucRow.use_cases_json === 'string'\n    ? JSON.parse(ucRow.use_cases_json)\n    : (ucRow.use_cases_json || {});\n} catch(e) {}\n\nconst files = filesDb2.filter(r => r.tipo === 'file');\nconst db2   = filesDb2.filter(r => r.tipo === 'db2');\n\n// ── FUNCTIONAL CONTEXT ────────────────────────────────────────\nconst groupsSummary = (ucData.groups || []).map(g => {\n  const ucList = (g.use_cases || []).map(u => `    - ${u.id}: ${u.title}`).join('\\n');\n  return `• ${g.id} — ${g.name}: ${g.description}\\n  Casos de uso:\\n${ucList}`;\n}).join('\\n\\n');\n\nconst filesBusiness = files.length\n  ? files.map(f => `• ${f.nombre}: utilizado por [${f.programas || '?'}]`).join('\\n')\n  : 'No detectados';\n\nconst db2Business = db2.length\n  ? db2.map(d => `• ${d.nombre}: accedido por [${d.programas || '?'}] (ops: ${d.organization || '?'})`).join('\\n')\n  : 'No detectados';\n\nconst functional_context =\n`SISTEMA: ${ucData.system_name || 'Sistema COBOL'}\nDESCRIPCIÓN: ${ucData.system_description || ''}\nTOTAL DE CASOS DE USO: ${ucData.total_use_cases || 0}\n\nMÓDULOS FUNCIONALES Y CASOS DE USO:\n${groupsSummary}\n\nARCHIVOS DE NEGOCIO:\n${filesBusiness}\n\nTABLAS DE DATOS:\n${db2Business}`;\n\n// ── TECHNICAL CONTEXT ─────────────────────────────────────────\nconst callsGraph = programs\n  .map(p => {\n    try {\n      const refs = JSON.parse(p.calls_json || '[]');\n      if (refs.length) return `• ${p.program_name} → ${refs.join(', ')}`;\n    } catch(e) {}\n    return null;\n  })\n  .filter(Boolean)\n  .join('\\n') || 'No se detectaron llamadas entre programas';\n\nconst progsSummary = programs.map(p =>\n  `• ${p.program_name} (complejidad: ${p.complexity_score || 'N/A'}, ${p.line_count || '?'} líneas): ${p.description || 'sin descripción'}`\n).join('\\n');\n\nconst filesTech = files.length\n  ? files.map(f => `• ${f.nombre} [Org: ${f.organization || '?'}, Acceso: ${f.access_mode || '?'}]: usado por [${f.programas || '?'}]`).join('\\n')\n  : 'No detectados';\n\nconst db2Tech = db2.length\n  ? db2.map(d => `• ${d.nombre} (ops: ${d.organization || '?'}): accedido por [${d.programas || '?'}]`).join('\\n')\n  : 'No detectados';\n\nconst technical_context =\n`SISTEMA: ${ucData.system_name || 'Sistema COBOL'}\nDESCRIPCIÓN: ${ucData.system_description || ''}\nTOTAL PROGRAMAS: ${programs.length}\n\nPROGRAMAS (mayor a menor complejidad):\n${progsSummary}\n\nGRAFO DE DEPENDENCIAS:\n${callsGraph}\n\nARCHIVOS FÍSICOS:\n${filesTech}\n\nTABLAS DB2:\n${db2Tech}`;\n\n// ── PROGRAMS DATA (pasado directo, no regenerado por LLM) ─────\nconst programs_data = programs.map(p => {\n  let tech_summary = 'Sin documentación técnica generada aún.';\n  if (p.tech_doc) {\n    // Primer párrafo significativo del tech doc\n    const firstPara = p.tech_doc\n      .replace(/^#+.+$/gm, '')\n      .split(/\\n{2,}/)\n      .map(s => s.trim())\n      .find(s => s.length > 40) || '';\n    tech_summary = firstPara.substring(0, 350) + (firstPara.length > 350 ? '...' : '');\n  }\n  return {\n    name:             p.program_name,\n    complexity_score: p.complexity_score ? parseFloat(p.complexity_score) : null,\n    line_count:       p.line_count || 0,\n    description:      p.description || '',\n    tech_summary\n  };\n});\n\nreturn {\n  json: {\n    functional_context,\n    technical_context,\n    programs_data: JSON.stringify(programs_data),\n    system_name: ucData.system_name || 'Sistema COBOL'\n  }\n};"
+      }
+    },
+    {
+      "id": "ob-node-07",
+      "name": "LLM Funcional",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [260, -120],
+      "parameters": {
+        "promptType": "define",
+        "text": "=Sos un especialista en capacitación de sistemas de información para analistas de negocio sin conocimiento técnico.\nTu tarea es crear un ONBOARDING FUNCIONAL completo para alguien que nunca trabajó con este sistema.\n\nINFORMACIÓN DEL SISTEMA:\n{{ $json.functional_context }}\n\nGenerá SOLO un JSON válido (sin markdown, sin texto extra) con esta estructura exacta:\n{\n  \"profile\": \"functional\",\n  \"title\": \"Onboarding Funcional — [nombre del sistema]\",\n  \"description\": \"Breve descripción del propósito de este onboarding\",\n  \"chapters\": [\n    {\n      \"id\": \"CAP-01\",\n      \"title\": \"El Sistema: Contexto y Propósito\",\n      \"learning_objectives\": [\n        \"Comprender qué problema de negocio resuelve el sistema\",\n        \"Identificar los actores principales que lo utilizan\"\n      ],\n      \"content\": \"Contenido completo del capítulo. Usá párrafos, listas con guiones y tablas markdown donde ayude. Mínimo 300 palabras.\",\n      \"key_concepts\": [\n        \"Concepto 1: explicación en una oración\",\n        \"Concepto 2: explicación en una oración\"\n      ],\n      \"summary\": \"Resumen del capítulo en 2-3 oraciones.\"\n    },\n    {\n      \"id\": \"CAP-02\",\n      \"title\": \"Capacidades del Sistema\",\n      \"learning_objectives\": [...],\n      \"content\": \"Explicá qué puede hacer el sistema, sus módulos principales y cómo se relacionan. Mínimo 250 palabras.\",\n      \"key_concepts\": [...],\n      \"summary\": \"...\"\n    },\n    {\n      \"id\": \"CAP-03\",\n      \"title\": \"Casos de Uso por Módulo\",\n      \"learning_objectives\": [...],\n      \"content\": \"Describí en detalle cada módulo funcional y sus casos de uso. Usá subsecciones por módulo. Mínimo 400 palabras.\",\n      \"key_concepts\": [...],\n      \"summary\": \"...\"\n    },\n    {\n      \"id\": \"CAP-04\",\n      \"title\": \"Datos del Negocio\",\n      \"learning_objectives\": [...],\n      \"content\": \"Explicá los archivos y tablas en términos de negocio, sin jerga técnica. Qué información contienen, para qué sirven, quién los usa. Mínimo 250 palabras.\",\n      \"key_concepts\": [...],\n      \"summary\": \"...\"\n    }\n  ]\n}\n\nREGLAS:\n- Todo el contenido en español\n- El content debe ser claro para alguien sin conocimiento de COBOL\n- Entre 3 y 6 learning_objectives por capítulo\n- Entre 3 y 6 key_concepts por capítulo\n- No uses vocabulario técnico de mainframe en el perfil funcional",
+        "batching": {}
+      }
+    },
+    {
+      "id": "ob-node-08",
+      "name": "Gemini Funcional",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [260, -320],
+      "parameters": {
+        "modelName": "models/gemini-2.0-flash",
+        "options": {
+          "responseMimeType": "application/json"
+        }
+      }
+    },
+    {
+      "id": "ob-node-09",
+      "name": "LLM Técnico",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [260, 280],
+      "parameters": {
+        "promptType": "define",
+        "text": "=Sos un especialista en capacitación técnica de sistemas COBOL mainframe.\nTu tarea es crear un ONBOARDING TÉCNICO completo para un desarrollador que va a mantener o evolucionar este sistema.\n\nINFORMACIÓN DEL SISTEMA:\n{{ $json.technical_context }}\n\nGenerá SOLO un JSON válido (sin markdown, sin texto extra) con esta estructura exacta:\n{\n  \"profile\": \"technical\",\n  \"title\": \"Onboarding Técnico — [nombre del sistema]\",\n  \"description\": \"Breve descripción del propósito de este onboarding\",\n  \"chapters\": [\n    {\n      \"id\": \"CAP-01\",\n      \"title\": \"Arquitectura General del Sistema\",\n      \"learning_objectives\": [\n        \"Entender la arquitectura general del sistema COBOL\",\n        \"Identificar los componentes principales y sus roles\"\n      ],\n      \"content\": \"Descripción técnica de la arquitectura: tipo de sistema, volumen, patrones de diseño COBOL usados, entorno de ejecución inferido. Mínimo 300 palabras.\",\n      \"key_concepts\": [\n        \"Concepto técnico 1: explicación\"\n      ],\n      \"summary\": \"Resumen en 2-3 oraciones.\"\n    },\n    {\n      \"id\": \"CAP-02\",\n      \"title\": \"Inventario de Programas\",\n      \"learning_objectives\": [...],\n      \"content\": \"Texto introductorio sobre el inventario: cómo están organizados los programas, qué representa la complejidad, cómo navegar el inventario. La lista detallada se muestra debajo de forma interactiva. Mínimo 150 palabras.\",\n      \"key_concepts\": [...],\n      \"summary\": \"...\"\n    },\n    {\n      \"id\": \"CAP-03\",\n      \"title\": \"Dependencias y Flujo de Llamadas\",\n      \"learning_objectives\": [...],\n      \"content\": \"Analizá el grafo de llamadas: qué programas son entry points, cuáles son utilitarios, cuáles son los más dependidos. Describí los flujos principales de ejecución. Mínimo 300 palabras.\",\n      \"key_concepts\": [...],\n      \"summary\": \"...\"\n    },\n    {\n      \"id\": \"CAP-04\",\n      \"title\": \"Programas Clave: Análisis en Profundidad\",\n      \"learning_objectives\": [...],\n      \"content\": \"Analizá en profundidad los 3 a 5 programas más complejos o críticos del sistema. Para cada uno: propósito, lógica principal, puntos de atención para el mantenedor. Mínimo 400 palabras.\",\n      \"key_concepts\": [...],\n      \"summary\": \"...\"\n    },\n    {\n      \"id\": \"CAP-05\",\n      \"title\": \"Estructura de Datos Técnica\",\n      \"learning_objectives\": [...],\n      \"content\": \"Describí los archivos físicos (organización, acceso, uso) y las tablas DB2 (operaciones, programas que las acceden). Incluí consideraciones de integridad y patrones de acceso. Mínimo 300 palabras.\",\n      \"key_concepts\": [...],\n      \"summary\": \"...\"\n    }\n  ]\n}\n\nREGLAS:\n- Todo el contenido en español\n- NO incluyas un array 'programs' — los programas se inyectan automáticamente en CAP-02\n- Entre 3 y 6 learning_objectives por capítulo\n- Entre 3 y 6 key_concepts por capítulo\n- Podés usar vocabulario técnico COBOL (PERFORM, SECTION, COPYBOOK, EXEC SQL, etc.)",
+        "batching": {}
+      }
+    },
+    {
+      "id": "ob-node-10",
+      "name": "Gemini Técnico",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [260, 480],
+      "parameters": {
+        "modelName": "models/gemini-2.0-flash",
+        "options": {
+          "responseMimeType": "application/json"
+        }
+      }
+    },
+    {
+      "id": "ob-node-11",
+      "name": "Parsea HTML Funcional",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [540, -120],
+      "parameters": {
+        "jsCode": "const chainOut = $input.first().json;\nlet raw = (chainOut.text || chainOut.output || '').trim();\nraw = raw.replace(/^```json\\s*/i,'').replace(/^```\\s*/i,'').replace(/```\\s*$/i,'').trim();\n\n// Extrae el objeto JSON principal\nconst s = raw.indexOf('{'), e = raw.lastIndexOf('}');\nif (s !== -1 && e > s) raw = raw.substring(s, e + 1);\n\n// Arregla comas finales\nraw = raw.replace(/,([\\s\\r\\n]*[}\\]])/g, '$1');\n\n// Repair: escapa saltos de línea/tabs reales dentro de strings JSON\nfunction repairJson(str) {\n  let out = '', inStr = false, esc = false;\n  for (let i = 0; i < str.length; i++) {\n    const c = str[i];\n    if (esc)        { out += c; esc = false; continue; }\n    if (c === '\\\\') { out += c; esc = true;  continue; }\n    if (c === '\"')  { inStr = !inStr; out += c; continue; }\n    if (inStr) {\n      if (c === '\\n') { out += '\\\\n'; continue; }\n      if (c === '\\r') { out += '\\\\r'; continue; }\n      if (c === '\\t') { out += '\\\\t'; continue; }\n    }\n    out += c;\n  }\n  return out;\n}\n\nlet ob;\ntry {\n  ob = JSON.parse(raw);\n} catch(e1) {\n  try {\n    ob = JSON.parse(repairJson(raw));\n  } catch(e2) {\n    try {\n      const fixed = repairJson(raw).replace(/([{,]\\s*)([a-zA-Z_][a-zA-Z0-9_]*)\\s*:/g, '$1\"$2\":');\n      ob = JSON.parse(fixed);\n    } catch(e3) {\n      const pos = parseInt((e1.message.match(/position (\\d+)/)||[])[1]) || 0;\n      const ctx = raw.substring(Math.max(0,pos-150), pos+150);\n      throw new Error(`LLM Funcional - JSON inválido en pos ${pos}: ${e1.message}\\nContexto: ...${ctx}...`);\n    }\n  }\n}\n\nconst esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');\n\nconst mdToHtml = text => {\n  if (!text) return '';\n  let h = text\n    .replace(/^### (.+)$/gm,'<h4>$1</h4>')\n    .replace(/^## (.+)$/gm,'<h3>$1</h3>')\n    .replace(/^# (.+)$/gm,'<h2>$1</h2>')\n    .replace(/\\*\\*(.+?)\\*\\*/g,'<strong>$1</strong>')\n    .replace(/\\*(.+?)\\*/g,'<em>$1</em>')\n    .replace(/^- (.+)$/gm,'<li>$1</li>')\n    .replace(/^\\d+\\. (.+)$/gm,'<li>$1</li>');\n  h = h.replace(/(<li>[\\s\\S]*?<\\/li>\\n?)+/g, m => `<ul>${m}</ul>`);\n  h = h.split(/\\n{2,}/).map(p => {\n    p = p.trim();\n    if (!p || p.startsWith('<')) return p;\n    return `<p>${p}</p>`;\n  }).join('\\n');\n  return h;\n};\n\nconst chapters = ob.chapters || [];\n\nconst tocHtml = chapters.map(ch =>\n  `<li><a href=\"#${ch.id}\">${esc(ch.id)}: ${esc(ch.title)}</a></li>`\n).join('');\n\nconst chaptersHtml = chapters.map(ch => {\n  const objHtml = (ch.learning_objectives||[]).map(o=>`<li>${esc(o)}</li>`).join('');\n  const kcHtml  = (ch.key_concepts||[]).map(k=>`<li>${esc(k)}</li>`).join('');\n  return `\n<section class=\"chapter\" id=\"${ch.id}\">\n  <div class=\"ch-header\">\n    <span class=\"ch-id\">${ch.id}</span>\n    <h2>${esc(ch.title)}</h2>\n  </div>\n  <div class=\"ch-body\">\n    <div class=\"box obj-box\"><div class=\"box-label\">📋 Objetivos de aprendizaje</div><ul>${objHtml}</ul></div>\n    <div class=\"ch-content\">${mdToHtml(ch.content||'')}</div>\n    <div class=\"box kc-box\"><div class=\"box-label\">💡 Conceptos clave</div><ul>${kcHtml}</ul></div>\n    <div class=\"box sum-box\"><div class=\"box-label\">📌 En resumen</div><p>${esc(ch.summary||'')}</p></div>\n  </div>\n</section>`;\n}).join('');\n\nconst CSS = `*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;display:flex;min-height:100vh;color:#111;background:#f8fafc}nav{width:230px;min-width:230px;background:#064e3b;color:#fff;padding:20px 14px;position:sticky;top:0;height:100vh;overflow-y:auto}.nav-title{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#6ee7b7;margin-bottom:6px;font-weight:600}.profile-badge{background:#10b981;color:#fff;padding:3px 10px;border-radius:12px;font-size:11px;display:inline-block;margin-bottom:14px}nav ul{list-style:none;padding:0;margin:0}nav li{margin-bottom:2px}nav a{color:#a7f3d0;text-decoration:none;font-size:13px;display:block;padding:6px 8px;border-radius:4px}nav a:hover{background:#065f46;color:#fff}main{flex:1;padding:40px;max-width:860px}.ob-header{margin-bottom:40px;padding-bottom:20px;border-bottom:2px solid #d1fae5}.ob-header h1{font-size:24px;color:#064e3b;margin:0 0 6px}.ob-header p{color:#6b7280;margin:0}.chapter{margin-bottom:48px}.ch-header{display:flex;align-items:center;gap:12px;margin-bottom:18px}.ch-id{background:#064e3b;color:#fff;padding:4px 10px;border-radius:4px;font-size:13px;font-weight:700}.ch-header h2{margin:0;font-size:20px;color:#064e3b}.ch-body{display:flex;flex-direction:column;gap:14px}.box{padding:16px 20px;border-radius:0 8px 8px 0}.box-label{font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;opacity:.8}.obj-box{background:#ecfdf5;border-left:4px solid #10b981}.obj-box ul{margin:0;padding-left:18px}.obj-box li{margin-bottom:4px;font-size:14px;color:#065f46}.kc-box{background:#fefce8;border-left:4px solid #eab308}.kc-box ul{margin:0;padding-left:18px}.kc-box li{margin-bottom:4px;font-size:14px;color:#713f12}.sum-box{background:#f0fdf4;border-left:4px solid #22c55e}.sum-box p{margin:0;font-size:14px;color:#14532d}.ch-content{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:20px;font-size:15px;line-height:1.65}.ch-content h2,.ch-content h3,.ch-content h4{color:#064e3b;margin-top:18px}.ch-content ul,.ch-content ol{padding-left:20px}.ch-content li{margin-bottom:4px}.ch-content p{margin:0 0 12px}`;\n\nconst content_html = `<!DOCTYPE html>\n<html lang=\"es\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>${esc(ob.title||'')}</title><style>${CSS}</style></head>\n<body>\n<nav><div class=\"nav-title\">Onboarding</div><span class=\"profile-badge\">Funcional</span><ul>${tocHtml}</ul></nav>\n<main>\n  <div class=\"ob-header\"><h1>${esc(ob.title||'')}</h1><p>${esc(ob.description||'')}</p></div>\n  ${chaptersHtml}\n</main></body></html>`;\n\nconst mdLines = [`# ${ob.title||'Onboarding Funcional'}`,'',(ob.description||''),''];\nfor (const ch of chapters) {\n  mdLines.push(`## ${ch.id}: ${ch.title}`,'');\n  mdLines.push('**Objetivos:**');\n  (ch.learning_objectives||[]).forEach(o=>mdLines.push(`- ${o}`));\n  mdLines.push('',ch.content||'','');\n  mdLines.push('**Conceptos clave:**');\n  (ch.key_concepts||[]).forEach(k=>mdLines.push(`- ${k}`));\n  mdLines.push('',`> ${ch.summary||''}`,'');\n}\n\nreturn { json: { profile:'functional', chapter_count:chapters.length, content_html, content_md:mdLines.join('\\n') } };"
+      }
+    },
+    {
+      "id": "ob-node-12",
+      "name": "Parsea HTML Técnico",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [540, 280],
+      "parameters": {
+        "jsCode": "const chainOut = $input.first().json;\nlet raw = (chainOut.text || chainOut.output || '').trim();\nraw = raw.replace(/^```json\\s*/i,'').replace(/^```\\s*/i,'').replace(/```\\s*$/i,'').trim();\n\n// Extrae el objeto JSON principal\nconst s = raw.indexOf('{'), e = raw.lastIndexOf('}');\nif (s !== -1 && e > s) raw = raw.substring(s, e + 1);\n\n// Arregla comas finales\nraw = raw.replace(/,([\\s\\r\\n]*[}\\]])/g, '$1');\n\n// Repair: escapa saltos de línea/tabs reales dentro de strings JSON\nfunction repairJson(str) {\n  let out = '', inStr = false, esc = false;\n  for (let i = 0; i < str.length; i++) {\n    const c = str[i];\n    if (esc)        { out += c; esc = false; continue; }\n    if (c === '\\\\') { out += c; esc = true;  continue; }\n    if (c === '\"')  { inStr = !inStr; out += c; continue; }\n    if (inStr) {\n      if (c === '\\n') { out += '\\\\n'; continue; }\n      if (c === '\\r') { out += '\\\\r'; continue; }\n      if (c === '\\t') { out += '\\\\t'; continue; }\n    }\n    out += c;\n  }\n  return out;\n}\n\nlet ob;\ntry {\n  ob = JSON.parse(raw);\n} catch(e1) {\n  try {\n    ob = JSON.parse(repairJson(raw));\n  } catch(e2) {\n    try {\n      const fixed = repairJson(raw).replace(/([{,]\\s*)([a-zA-Z_][a-zA-Z0-9_]*)\\s*:/g, '$1\"$2\":');\n      ob = JSON.parse(fixed);\n    } catch(e3) {\n      const pos = parseInt((e1.message.match(/position (\\d+)/)||[])[1]) || 0;\n      const ctx = raw.substring(Math.max(0,pos-150), pos+150);\n      throw new Error(`LLM Técnico - JSON inválido en pos ${pos}: ${e1.message}\\nContexto: ...${ctx}...`);\n    }\n  }\n}\n\nconst programsData = JSON.parse($('Prepara Contextos').first().json.programs_data || '[]');\n\nconst esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');\n\nconst mdToHtml = text => {\n  if (!text) return '';\n  let h = text\n    .replace(/^### (.+)$/gm,'<h4>$1</h4>')\n    .replace(/^## (.+)$/gm,'<h3>$1</h3>')\n    .replace(/^# (.+)$/gm,'<h2>$1</h2>')\n    .replace(/\\*\\*(.+?)\\*\\*/g,'<strong>$1</strong>')\n    .replace(/\\*(.+?)\\*/g,'<em>$1</em>')\n    .replace(/^- (.+)$/gm,'<li>$1</li>')\n    .replace(/^\\d+\\. (.+)$/gm,'<li>$1</li>');\n  h = h.replace(/(<li>[\\s\\S]*?<\\/li>\\n?)+/g, m => `<ul>${m}</ul>`);\n  h = h.split(/\\n{2,}/).map(p => {\n    p = p.trim();\n    if (!p || p.startsWith('<')) return p;\n    return `<p>${p}</p>`;\n  }).join('\\n');\n  return h;\n};\n\nconst complexityBadge = score => {\n  const n = parseFloat(score);\n  if (isNaN(n)) return '<span class=\"badge badge-na\">N/A</span>';\n  if (n >= 7)   return `<span class=\"badge badge-high\">Alta ${n}</span>`;\n  if (n >= 4)   return `<span class=\"badge badge-med\">Media ${n}</span>`;\n  return         `<span class=\"badge badge-low\">Baja ${n}</span>`;\n};\n\nconst programsHtml = programsData.map(p => `\n<details class=\"prog-entry\">\n  <summary>\n    <span class=\"prog-name\">${esc(p.name)}</span>\n    ${complexityBadge(p.complexity_score)}\n    <span class=\"prog-lines\">${(p.line_count||0).toLocaleString('es')} líneas</span>\n  </summary>\n  <div class=\"prog-detail\">\n    <p><strong>Descripción:</strong> ${esc(p.description)}</p>\n    <p><strong>Resumen técnico:</strong> ${esc(p.tech_summary)}</p>\n  </div>\n</details>`).join('');\n\nconst chapters = ob.chapters || [];\n\nconst tocHtml = chapters.map(ch =>\n  `<li><a href=\"#${ch.id}\">${esc(ch.id)}: ${esc(ch.title)}</a></li>`\n).join('');\n\nconst chaptersHtml = chapters.map(ch => {\n  const objHtml = (ch.learning_objectives||[]).map(o=>`<li>${esc(o)}</li>`).join('');\n  const kcHtml  = (ch.key_concepts||[]).map(k=>`<li>${esc(k)}</li>`).join('');\n  const extraSection = (ch.id === 'CAP-02' && programsData.length > 0)\n    ? `<div class=\"programs-section\"><h3>Programas del sistema (${programsData.length} total — click para expandir)</h3><div class=\"programs-list\">${programsHtml}</div></div>`\n    : '';\n  return `\n<section class=\"chapter\" id=\"${ch.id}\">\n  <div class=\"ch-header\">\n    <span class=\"ch-id\">${ch.id}</span>\n    <h2>${esc(ch.title)}</h2>\n  </div>\n  <div class=\"ch-body\">\n    <div class=\"box obj-box\"><div class=\"box-label\">📋 Objetivos de aprendizaje</div><ul>${objHtml}</ul></div>\n    <div class=\"ch-content\">${mdToHtml(ch.content||'')}</div>\n    ${extraSection}\n    <div class=\"box kc-box\"><div class=\"box-label\">💡 Conceptos clave</div><ul>${kcHtml}</ul></div>\n    <div class=\"box sum-box\"><div class=\"box-label\">📌 En resumen</div><p>${esc(ch.summary||'')}</p></div>\n  </div>\n</section>`;\n}).join('');\n\nconst CSS = `*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;display:flex;min-height:100vh;color:#111;background:#f8fafc}nav{width:230px;min-width:230px;background:#1e3a5f;color:#fff;padding:20px 14px;position:sticky;top:0;height:100vh;overflow-y:auto}.nav-title{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#93c5fd;margin-bottom:6px;font-weight:600}.profile-badge{background:#3b82f6;color:#fff;padding:3px 10px;border-radius:12px;font-size:11px;display:inline-block;margin-bottom:14px}nav ul{list-style:none;padding:0;margin:0}nav li{margin-bottom:2px}nav a{color:#bfdbfe;text-decoration:none;font-size:13px;display:block;padding:6px 8px;border-radius:4px}nav a:hover{background:#2563eb;color:#fff}main{flex:1;padding:40px;max-width:900px}.ob-header{margin-bottom:40px;padding-bottom:20px;border-bottom:2px solid #dbeafe}.ob-header h1{font-size:24px;color:#1e3a5f;margin:0 0 6px}.ob-header p{color:#6b7280;margin:0}.chapter{margin-bottom:48px}.ch-header{display:flex;align-items:center;gap:12px;margin-bottom:18px}.ch-id{background:#1e3a5f;color:#fff;padding:4px 10px;border-radius:4px;font-size:13px;font-weight:700}.ch-header h2{margin:0;font-size:20px;color:#1e3a5f}.ch-body{display:flex;flex-direction:column;gap:14px}.box{padding:16px 20px;border-radius:0 8px 8px 0}.box-label{font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;opacity:.8}.obj-box{background:#eff6ff;border-left:4px solid #3b82f6}.obj-box ul{margin:0;padding-left:18px}.obj-box li{margin-bottom:4px;font-size:14px;color:#1e40af}.kc-box{background:#fefce8;border-left:4px solid #eab308}.kc-box ul{margin:0;padding-left:18px}.kc-box li{margin-bottom:4px;font-size:14px;color:#713f12}.sum-box{background:#f0fdf4;border-left:4px solid #22c55e}.sum-box p{margin:0;font-size:14px;color:#14532d}.ch-content{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:20px;font-size:15px;line-height:1.65}.ch-content h2,.ch-content h3,.ch-content h4{color:#1e3a5f;margin-top:18px}.ch-content ul,.ch-content ol{padding-left:20px}.ch-content li{margin-bottom:4px}.ch-content p{margin:0 0 12px}.programs-section{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:20px}.programs-section h3{margin:0 0 4px;font-size:15px;color:#1e3a5f}.programs-section p.hint{font-size:13px;color:#6b7280;margin:0 0 12px}.programs-list{display:flex;flex-direction:column;gap:6px}.prog-entry{border:1px solid #e5e7eb;border-radius:6px;overflow:hidden}.prog-entry summary{display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;background:#f8fafc;list-style:none;user-select:none}.prog-entry summary:hover{background:#eff6ff}.prog-entry summary::-webkit-details-marker{display:none}.prog-name{font-weight:600;font-size:14px;color:#111;min-width:120px}.prog-lines{font-size:12px;color:#6b7280;margin-left:auto}.badge{padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600}.badge-high{background:#fee2e2;color:#b91c1c}.badge-med{background:#fef3c7;color:#b45309}.badge-low{background:#dcfce7;color:#166534}.badge-na{background:#f3f4f6;color:#6b7280}.prog-detail{padding:12px 14px;background:#fff;border-top:1px solid #e5e7eb;font-size:14px}.prog-detail p{margin:0 0 6px;color:#374151}`;\n\nconst content_html = `<!DOCTYPE html>\n<html lang=\"es\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>${esc(ob.title||'')}</title><style>${CSS}</style></head>\n<body>\n<nav><div class=\"nav-title\">Onboarding</div><span class=\"profile-badge\">Técnico</span><ul>${tocHtml}</ul></nav>\n<main>\n  <div class=\"ob-header\"><h1>${esc(ob.title||'')}</h1><p>${esc(ob.description||'')}</p></div>\n  ${chaptersHtml}\n</main></body></html>`;\n\nconst mdLines = [`# ${ob.title||'Onboarding Técnico'}`,'',(ob.description||''),''];\nfor (const ch of chapters) {\n  mdLines.push(`## ${ch.id}: ${ch.title}`,'');\n  mdLines.push('**Objetivos:**');\n  (ch.learning_objectives||[]).forEach(o=>mdLines.push(`- ${o}`));\n  mdLines.push('',ch.content||'','');\n  if (ch.id === 'CAP-02') {\n    mdLines.push('**Programas:**');\n    programsData.forEach(p=>mdLines.push(`- ${p.name} (complejidad: ${p.complexity_score||'N/A'}, ${p.line_count} líneas): ${p.description}`));\n    mdLines.push('');\n  }\n  mdLines.push('**Conceptos clave:**');\n  (ch.key_concepts||[]).forEach(k=>mdLines.push(`- ${k}`));\n  mdLines.push('',`> ${ch.summary||''}`,'');\n}\n\nreturn { json: { profile:'technical', chapter_count:chapters.length, content_html, content_md:mdLines.join('\\n') } };"
+      }
+    },
+    {
+      "id": "ob-node-13",
+      "name": "Merge",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [820, 80],
+      "parameters": {
+        "mode": "append"
+      }
+    },
+    {
+      "id": "ob-node-14",
+      "name": "INSERT onboarding_content",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1060, 80],
+      "parameters": {
+        "operation": "insert",
+        "schema": {
+          "__rl": true,
+          "value": "cobol_analysis",
+          "mode": "list"
+        },
+        "table": {
+          "__rl": true,
+          "value": "onboarding_content",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "profile":       "={{ $json.profile }}",
+            "chapter_count": "={{ $json.chapter_count }}",
+            "content_html":  "={{ $json.content_html }}",
+            "content_md":    "={{ $json.content_md }}"
+          }
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ob-node-15",
+      "name": "UPDATE Status Completado",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1300, 80],
+      "alwaysOutputData": true,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE cobol_analysis.content_generation_status\nSET\n  status       = 'completed',\n  generated_at = NOW(),\n  output_table = 'onboarding_content',\n  updated_at   = NOW()\nWHERE scope = 'system'\n  AND content_type IN ('onboarding_functional', 'onboarding_technical')",
+        "options": {}
+      }
+    },
+    {
+      "id": "ob-node-16",
+      "name": "Formatea Respuesta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 80],
+      "parameters": {
+        "jsCode": "return {\n  json: {\n    success: true,\n    message: 'Onboarding generado exitosamente para ambos perfiles',\n    profiles: ['functional', 'technical'],\n    generated_at: new Date().toISOString()\n  }\n};"
+      }
+    },
+    {
+      "id": "ob-node-17",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [1780, 80],
+      "parameters": { "options": {} }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Marca In Progress", "type": "main", "index": 0 }]]
+    },
+    "Marca In Progress": {
+      "main": [[{ "node": "Carga Use Cases", "type": "main", "index": 0 }]]
+    },
+    "Carga Use Cases": {
+      "main": [[{ "node": "Carga Programas y TechDocs", "type": "main", "index": 0 }]]
+    },
+    "Carga Programas y TechDocs": {
+      "main": [[{ "node": "Carga Archivos y DB2", "type": "main", "index": 0 }]]
+    },
+    "Carga Archivos y DB2": {
+      "main": [[{ "node": "Prepara Contextos", "type": "main", "index": 0 }]]
+    },
+    "Prepara Contextos": {
+      "main": [[
+        { "node": "LLM Funcional", "type": "main", "index": 0 },
+        { "node": "LLM Técnico",   "type": "main", "index": 0 }
+      ]]
+    },
+    "Gemini Funcional": {
+      "ai_languageModel": [[{ "node": "LLM Funcional", "type": "ai_languageModel", "index": 0 }]]
+    },
+    "Gemini Técnico": {
+      "ai_languageModel": [[{ "node": "LLM Técnico", "type": "ai_languageModel", "index": 0 }]]
+    },
+    "LLM Funcional": {
+      "main": [[{ "node": "Parsea HTML Funcional", "type": "main", "index": 0 }]]
+    },
+    "LLM Técnico": {
+      "main": [[{ "node": "Parsea HTML Técnico", "type": "main", "index": 0 }]]
+    },
+    "Parsea HTML Funcional": {
+      "main": [[{ "node": "Merge", "type": "main", "index": 0 }]]
+    },
+    "Parsea HTML Técnico": {
+      "main": [[{ "node": "Merge", "type": "main", "index": 1 }]]
+    },
+    "Merge": {
+      "main": [[{ "node": "INSERT onboarding_content", "type": "main", "index": 0 }]]
+    },
+    "INSERT onboarding_content": {
+      "main": [[{ "node": "UPDATE Status Completado", "type": "main", "index": 0 }]]
+    },
+    "UPDATE Status Completado": {
+      "main": [[{ "node": "Formatea Respuesta", "type": "main", "index": 0 }]]
+    },
+    "Formatea Respuesta": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

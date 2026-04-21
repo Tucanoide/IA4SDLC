@@ -1,0 +1,56 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum SystemStatus {
+  EMPTY
+  INGESTING
+  READY
+  ANALYZING
+  COMPLETED
+  FAILED
+}
+
+enum JobType {
+  INGEST_RAG
+  FORENSIC_AUDIT
+  DOCUMENTATION
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model System {
+  id          String       @id @default(uuid())
+  name        String
+  description String?
+  status      SystemStatus @default(EMPTY)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  jobs        Job[]
+}
+
+model Job {
+  id           String    @id @default(uuid())
+  systemId     String
+  type         JobType
+  status       JobStatus @default(PENDING)
+  startedAt    DateTime?
+  completedAt  DateTime?
+  errorMessage String?
+
+  system       System    @relation(fields: [systemId], references: [id], onDelete: Cascade)
+}

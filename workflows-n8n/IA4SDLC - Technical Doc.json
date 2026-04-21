@@ -1,0 +1,641 @@
+{
+  "name": "IA4SDLC - Technical Doc",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## IA4SDLC - Technical Doc\n\n**Propósito:** Genera documentación técnica completa de un programa COBOL.\n\n**Fuentes de datos:**\n- PostgreSQL: código fuente, divisiones, calls, copybooks, file_accesses, db2_accesses\n- LLM: genera la narrativa técnica estructurada\n\n**Llamada:**\n```\nPOST /webhook/ia4sdlc-technical-doc\n{ \"program_name\": \"CBACT04C\" }\n```\n\n**Output:** Markdown + HTML guardados en technical_docs",
+        "height": 352,
+        "width": 644,
+        "color": 7
+      },
+      "id": "cac04610-5f9e-403d-a6cc-c7097d80be28",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        80,
+        -32
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ia4sdlc-technical-doc",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "c48e2257-8e4b-4b2c-bc17-5332a82ac68e",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        400
+      ],
+      "webhookId": "4fdf08e0-23cc-4e62-8ed8-d1db2ccfff6e"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\nconst program_name = (body.program_name || '').toUpperCase().trim();\nif (!program_name) throw new Error('program_name es requerido');\nreturn { json: { program_name } };"
+      },
+      "id": "baf2685b-d5b4-421b-84e4-703a0c4e3a28",
+      "name": "Extrae Params",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  p.id                       AS program_id,\n  p.program_name,\n  p.original_code,\n  p.metadata,\n  pv.id                      AS version_id,\n  pv.line_count,\n  pv.clean_line_count,\n  COALESCE(pv.checksum,'')   AS current_checksum,\n  cgs.status                 AS doc_status,\n  cgs.generated_for_checksum AS cached_checksum,\n  cgs.output_id              AS existing_doc_id\nFROM cobol_analysis.programs p\nJOIN LATERAL (\n  SELECT id, checksum, line_count, clean_line_count\n  FROM   cobol_analysis.program_versions\n  WHERE  program_id = p.id\n  ORDER  BY version_number DESC\n  LIMIT  1\n) pv ON true\nLEFT JOIN cobol_analysis.content_generation_status cgs\n  ON  cgs.program_id   = p.id\n  AND cgs.content_type = 'technical_doc'\nWHERE p.program_name = '{{ $('Extrae Params').first().json.program_name }}'",
+        "options": {}
+      },
+      "id": "8dd6bd5c-4cdc-488b-9d2d-b491087b19ed",
+      "name": "Busca Datos Programa",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        480,
+        400
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "bVZq5l7mYOK3t0Xm",
+          "name": "Postgres ia4sdlc_cobolpoc"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Calls salientes\nSELECT 'call' AS tipo, called_program_name AS nombre, call_type AS detalle, line_number::text AS extra\nFROM cobol_analysis.program_calls pc\nJOIN cobol_analysis.program_versions pv ON pv.id = pc.caller_version_id\nWHERE pv.program_id = {{ $json.program_id }}\n\nUNION ALL\n\n-- Copybooks\nSELECT 'copybook', copybook_name, division, line_number::text\nFROM cobol_analysis.copybook_inclusions ci\nJOIN cobol_analysis.program_versions pv ON pv.id = ci.version_id\nWHERE pv.program_id = {{ $json.program_id }}\n\nUNION ALL\n\n-- Archivos físicos\nSELECT 'file', logical_name, physical_name, file_type\nFROM cobol_analysis.file_accesses fa\nJOIN cobol_analysis.program_versions pv ON pv.id = fa.version_id\nWHERE pv.program_id = {{ $json.program_id }}\n\nUNION ALL\n\n-- Tablas DB2\nSELECT 'db2', table_name, COALESCE(schema_name,''), array_to_string(operations,',')\nFROM cobol_analysis.db2_accesses da\nJOIN cobol_analysis.program_versions pv ON pv.id = da.version_id\nWHERE pv.program_id = {{ $json.program_id }}",
+        "options": {}
+      },
+      "id": "93f485b3-9085-43e8-8bf7-b2bb7aa886b8",
+      "name": "Busca Relaciones",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        720,
+        400
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "bVZq5l7mYOK3t0Xm",
+          "name": "Postgres ia4sdlc_cobolpoc"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const prog      = $('Busca Datos Programa').first().json;\nconst relations = $('Busca Relaciones').all().map(i => i.json);\n\nif (!prog.program_id) {\n  throw new Error(`Programa '${$('Extrae Params').first().json.program_name}' no encontrado`);\n}\n\nconst use_cache = (\n  prog.doc_status === 'completed' &&\n  prog.cached_checksum === prog.current_checksum &&\n  prog.existing_doc_id != null\n);\n\n// Agrupa relaciones por tipo\nconst calls     = relations.filter(r => r.tipo === 'call');\nconst copybooks = relations.filter(r => r.tipo === 'copybook');\nconst files     = relations.filter(r => r.tipo === 'file');\nconst db2       = relations.filter(r => r.tipo === 'db2');\n\n// Construye contexto estructurado para el LLM\nconst context = [\n  calls.length     ? `PROGRAMAS QUE LLAMA:\\n${calls.map(c => `- ${c.nombre} (${c.detalle}, línea ${c.extra})`).join('\\n')}` : '',\n  copybooks.length ? `COPYBOOKS INCLUIDOS:\\n${copybooks.map(c => `- ${c.nombre} en ${c.detalle} (línea ${c.extra})`).join('\\n')}` : '',\n  files.length     ? `ARCHIVOS ACCEDIDOS:\\n${files.map(f => `- ${f.nombre} → ${f.detalle} (${f.extra || 'tipo desconocido'})`).join('\\n')}` : '',\n  db2.length       ? `TABLAS DB2:\\n${db2.map(d => `- ${d.detalle}.${d.nombre} [${d.extra}]`).join('\\n')}` : ''\n].filter(Boolean).join('\\n\\n');\n\nreturn {\n  json: {\n    ...prog,\n    use_cache,\n    calls, copybooks, files, db2,\n    relations_context: context\n  }\n};"
+      },
+      "id": "e193e137-83b6-4b71-912a-81daefcaac31",
+      "name": "Evalúa Caché y Prepara Contexto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "cond-cache",
+              "leftValue": "={{ $json.use_cache }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b8bc514d-3470-4e1c-99ee-d3a7b485b366",
+      "name": "¿Usar caché?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1200,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, program_name, content_md, content_html, generated_at\nFROM cobol_analysis.technical_docs\nWHERE id = {{ $('Evalúa Caché y Prepara Contexto').first().json.existing_doc_id }}",
+        "options": {}
+      },
+      "id": "6e39d036-5f49-4bf3-9bda-ef11a3ce8dcd",
+      "name": "Fetch Doc Existente",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1440,
+        160
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "bVZq5l7mYOK3t0Xm",
+          "name": "Postgres ia4sdlc_cobolpoc"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $input.first().json;\nreturn {\n  json: {\n    success:      true,\n    from_cache:   true,\n    program_name: row.program_name,\n    content_md:   row.content_md,\n    content_html: row.content_html,\n    generated_at: row.generated_at\n  }\n};"
+      },
+      "id": "7ce1178c-63d3-4bac-b57d-089404989682",
+      "name": "Formatea Respuesta Caché",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE cobol_analysis.content_generation_status\nSET status = 'in_progress', n8n_execution_id = '{{ $execution.id }}', updated_at = NOW()\nWHERE program_id = {{ $('Evalúa Caché y Prepara Contexto').first().json.program_id }}\n  AND content_type = 'technical_doc'",
+        "options": {}
+      },
+      "id": "9d18c118-05c2-4f49-b303-833cd0e6baab",
+      "name": "Marca In Progress",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1440,
+        608
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "bVZq5l7mYOK3t0Xm",
+          "name": "Postgres ia4sdlc_cobolpoc"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-2.0-flash",
+        "options": {}
+      },
+      "id": "75f9ead6-3278-4116-8f9a-eadfd0af1175",
+      "name": "Gemini Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        1680,
+        800
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "LF8v3r6B3mzBXYK5",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Sos un arquitecto de software especialista en sistemas COBOL mainframe.\nGenerá documentación técnica completa y detallada del siguiente programa.\nEscribí en español, con lenguaje técnico y preciso.\n\n---\nPROGRAMA: {{ $('Evalúa Caché y Prepara Contexto').first().json.program_name }}\nLÍNEAS TOTALES: {{ $('Evalúa Caché y Prepara Contexto').first().json.line_count || 'N/D' }}\nLÍNEAS DE CÓDIGO: {{ $('Evalúa Caché y Prepara Contexto').first().json.clean_line_count || 'N/D' }}\n\n{{ $('Evalúa Caché y Prepara Contexto').first().json.relations_context }}\n\nCÓDIGO FUENTE COMPLETO:\n{{ $('Evalúa Caché y Prepara Contexto').first().json.original_code }}\n---\n\nGenerá un documento técnico en Markdown con EXACTAMENTE estas secciones:\n\n# {{ $('Evalúa Caché y Prepara Contexto').first().json.program_name }} — Documentación Técnica\n\n## 1. Propósito\n[Descripción técnica clara de qué hace el programa, 2-4 párrafos]\n\n## 2. Arquitectura del Programa\n[Descripción de las divisiones COBOL presentes, estructura general]\n\n## 3. Entradas\n[Archivos de entrada, parámetros LINKAGE, tablas DB2 leídas]\n\n## 4. Salidas\n[Archivos de salida, códigos de retorno, tablas DB2 escritas]\n\n## 5. Lógica de Procesamiento\n[Descripción párrafo a párrafo de la PROCEDURE DIVISION, explicando cada sección funcional]\n\n## 6. Dependencias\n### 6.1 Programas Llamados\n[Tabla: Programa | Tipo de CALL | Línea | Propósito inferido]\n### 6.2 Copybooks Incluidos\n[Tabla: Nombre | División | Propósito inferido]\n### 6.3 Archivos Accedidos\n[Tabla: Nombre lógico | Nombre físico | Tipo]\n### 6.4 Tablas DB2\n[Tabla: Schema | Tabla | Operaciones]\n\n## 7. Estructuras de Datos Clave\n[Variables y grupos de datos más importantes de WORKING-STORAGE y LINKAGE]\n\n## 8. Manejo de Errores\n[Cómo el programa maneja errores de I/O, SQL y condiciones excepcionales]\n\n## 9. Consideraciones Técnicas\n[Limitaciones conocidas, puntos de atención, deuda técnica identificada]",
+        "batching": {}
+      },
+      "id": "f27c8f8c-3ddf-4608-8f3f-5eba41d5ec0e",
+      "name": "LLM Genera Doc Técnica",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        1680,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const chainOut = $input.first().json;\nconst prog     = $('Evalúa Caché y Prepara Contexto').first().json;\n\nconst content_md = (chainOut.text || chainOut.output || '').trim();\n\n// Convierte Markdown básico a HTML\nconst mdToHtml = (md) => {\n  return md\n    .replace(/^# (.+)$/gm,   '<h1>$1</h1>')\n    .replace(/^## (.+)$/gm,  '<h2>$1</h2>')\n    .replace(/^### (.+)$/gm, '<h3>$1</h3>')\n    .replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>')\n    .replace(/`(.+?)`/g, '<code>$1</code>')\n    .replace(/^\\| (.+) \\|$/gm, (m) => '<tr>' + m.split('|').filter(c => c.trim()).map(c => `<td>${c.trim()}</td>`).join('') + '</tr>')\n    .replace(/^- (.+)$/gm, '<li>$1</li>')\n    .replace(/(<li>.*<\\/li>\\n?)+/g, s => `<ul>${s}</ul>`)\n    .replace(/(<tr>.*<\\/tr>\\n?)+/g, s => `<table>${s}</table>`)\n    .replace(/\\n{2,}/g, '</p><p>')\n    .replace(/^(?!<[h|u|t|l|p])/gm, '')\n};\n\nconst body_html = mdToHtml(content_md);\n\nconst content_html = `<!DOCTYPE html>\n<html lang=\"es\">\n<head><meta charset=\"UTF-8\">\n<style>\n  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:32px;max-width:900px;color:#111;line-height:1.6;}\n  h1{font-size:24px;border-bottom:2px solid #3b82f6;padding-bottom:8px;color:#1e3a5f;}\n  h2{font-size:18px;margin-top:32px;color:#1e40af;border-bottom:1px solid #e5e7eb;padding-bottom:4px;}\n  h3{font-size:15px;color:#374151;margin-top:16px;}\n  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:14px;}\n  td,th{border:1px solid #e5e7eb;padding:8px 12px;text-align:left;}\n  tr:first-child td{background:#f1f5f9;font-weight:600;}\n  tr:nth-child(even) td{background:#f9fafb;}\n  code{background:#f3f4f6;padding:2px 6px;border-radius:4px;font-size:13px;font-family:monospace;}\n  ul{padding-left:20px;}\n  li{margin-bottom:4px;}\n  .meta{background:#eff6ff;border-left:4px solid #3b82f6;padding:12px 16px;margin-bottom:24px;border-radius:4px;font-size:13px;color:#374151;}\n</style>\n</head>\n<body>\n<div class=\"meta\">\n  <strong>Programa:</strong> ${prog.program_name} &nbsp;|&nbsp;\n  <strong>Líneas:</strong> ${prog.line_count || 'N/D'} &nbsp;|&nbsp;\n  <strong>Generado:</strong> ${new Date().toLocaleDateString('es-AR')}\n</div>\n${body_html}\n</body></html>`;\n\nreturn {\n  json: {\n    program_id:       prog.program_id,\n    program_name:     prog.program_name,\n    version_id:       prog.version_id,\n    current_checksum: prog.current_checksum,\n    content_md,\n    content_html\n  }\n};"
+      },
+      "id": "0982860c-adc9-48e9-acb8-9d3145692ae3",
+      "name": "Genera HTML y Prepara Datos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1952,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO cobol_analysis.technical_docs\n  (program_id, program_name, version_id, content_md, content_html, generated_at)\nVALUES ($1, $2, $3, $4, $5, NOW())\nRETURNING id AS doc_id",
+        "options": {
+          "queryReplacement": "={{ $json.program_id }}, {{ $json.program_name }}, {{ $json.version_id }}, {{ $json.content_md }}, {{ $json.content_html }}"
+        }
+      },
+      "id": "e3c2967b-dfd8-4828-acb7-97b650cffee7",
+      "name": "INSERT technical_docs",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2048,
+        768
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "bVZq5l7mYOK3t0Xm",
+          "name": "Postgres ia4sdlc_cobolpoc"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE cobol_analysis.content_generation_status\nSET\n  status                 = 'completed',\n  generated_at           = NOW(),\n  generated_for_checksum = '{{ $('Genera HTML y Prepara Datos').first().json.current_checksum }}',\n  output_table           = 'technical_docs',\n  output_id              = {{ $json.id }},\n  n8n_execution_id       = '{{ $execution.id }}',\n  updated_at             = NOW()\nWHERE program_id   = {{ $('Genera HTML y Prepara Datos').first().json.program_id }}\n  AND content_type = 'technical_doc'",
+        "options": {}
+      },
+      "id": "d0e42e02-6c2f-4148-a302-d01c753d1bc7",
+      "name": "UPDATE Status Completado",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2400,
+        608
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "bVZq5l7mYOK3t0Xm",
+          "name": "Postgres ia4sdlc_cobolpoc"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $('Genera HTML y Prepara Datos').first().json;\nreturn {\n  json: {\n    success:      true,\n    from_cache:   false,\n    program_name: data.program_name,\n    content_md:   data.content_md,\n    content_html: data.content_html,\n    generated_at: new Date().toISOString()\n  }\n};"
+      },
+      "id": "d46ba903-9897-4952-9b36-e12141c51e75",
+      "name": "Formatea Respuesta Nueva",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "82fa1ecc-b020-4451-a73d-c69aaecb1566",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        2880,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "content": "# EJECUCION\n\ncurl -X POST https://n8n.srv1187720.hstgr.cloud/webhook-test/ia4sdlc-technical-doc \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"program_name\": \"CBACT04C\"}'\n",
+        "height": 272,
+        "width": 464,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -576,
+        336
+      ],
+      "typeVersion": 1,
+      "id": "164139e7-ccbc-4fa8-b3fd-f3acf3299757",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "schema": {
+          "__rl": true,
+          "value": "cobol_analysis",
+          "mode": "list",
+          "cachedResultName": "cobol_analysis"
+        },
+        "table": {
+          "__rl": true,
+          "value": "technical_docs",
+          "mode": "list",
+          "cachedResultName": "technical_docs"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "program_id": "={{ $json.program_id }}",
+            "version_id": "={{ $json.version_id }}",
+            "program_name": "={{ $json.program_name }}",
+            "content_md": "={{ $json.content_md }}",
+            "content_html": "={{ $json.content_html }}",
+            "generated_at": "={{  $now }}"
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "program_id",
+              "displayName": "program_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "program_name",
+              "displayName": "program_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "version_id",
+              "displayName": "version_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "content_md",
+              "displayName": "content_md",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "content_html",
+              "displayName": "content_html",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "generated_at",
+              "displayName": "generated_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "outputColumns": [
+            "id"
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2176,
+        624
+      ],
+      "id": "cbc9c5cd-550e-4be8-9d04-f507387d7824",
+      "name": "Insert technical_rows I",
+      "credentials": {
+        "postgres": {
+          "id": "bVZq5l7mYOK3t0Xm",
+          "name": "Postgres ia4sdlc_cobolpoc"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Extrae Params",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extrae Params": {
+      "main": [
+        [
+          {
+            "node": "Busca Datos Programa",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Busca Datos Programa": {
+      "main": [
+        [
+          {
+            "node": "Busca Relaciones",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Busca Relaciones": {
+      "main": [
+        [
+          {
+            "node": "Evalúa Caché y Prepara Contexto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evalúa Caché y Prepara Contexto": {
+      "main": [
+        [
+          {
+            "node": "¿Usar caché?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Usar caché?": {
+      "main": [
+        [
+          {
+            "node": "Fetch Doc Existente",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Marca In Progress",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Doc Existente": {
+      "main": [
+        [
+          {
+            "node": "Formatea Respuesta Caché",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formatea Respuesta Caché": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Marca In Progress": {
+      "main": [
+        [
+          {
+            "node": "LLM Genera Doc Técnica",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "LLM Genera Doc Técnica",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM Genera Doc Técnica": {
+      "main": [
+        [
+          {
+            "node": "Genera HTML y Prepara Datos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Genera HTML y Prepara Datos": {
+      "main": [
+        [
+          {
+            "node": "Insert technical_rows I",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "INSERT technical_docs": {
+      "main": [
+        []
+      ]
+    },
+    "UPDATE Status Completado": {
+      "main": [
+        [
+          {
+            "node": "Formatea Respuesta Nueva",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formatea Respuesta Nueva": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert technical_rows I": {
+      "main": [
+        [
+          {
+            "node": "UPDATE Status Completado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "421a5c0f-c6de-4bbe-b872-12782ac0049c",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "ca83e2d9765dd63d06874804996c77eba3171bc782fc3948ed37983fe808566f"
+  },
+  "id": "oRTuivnuCqwBH2wY",
+  "tags": []
+}

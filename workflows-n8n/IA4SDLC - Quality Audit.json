@@ -1,0 +1,263 @@
+{
+  "name": "IA4SDLC - Quality Audit",
+  "nodes": [
+    {
+      "id": "qa-note-00",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-1200, -320],
+      "parameters": {
+        "content": "## IA4SDLC - Quality Audit\n\n**Propósito:** Genera un reporte de auditoría de calidad para un programa COBOL.\n\n**Flujo:**\n1. Recibe `program_name` del frontend\n2. Verifica si ya existe un audit vigente (checksum igual)\n3. Si existe → retorna desde caché\n4. Si no → calcula métricas estáticas + LLM → guarda + retorna\n\n**Llamada:**\n```\nPOST /webhook/ia4sdlc-quality-audit\n{ \"program_name\": \"CBACT04C\" }\n```\n\n**Métricas estáticas calculadas en JS:**\nGO TO, dead paragraphs, comment ratio,\nPERFORM count, EXEC SQL, error handling",
+        "height": 300,
+        "width": 480,
+        "color": 7
+      }
+    },
+    {
+      "id": "qa-node-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [-1200, 80],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ia4sdlc-quality-audit",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "qa-node-02",
+      "name": "Extrae Params",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-960, 80],
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\nconst program_name = (body.program_name || '').toUpperCase().trim();\n\nif (!program_name) throw new Error('program_name es requerido');\n\nreturn { json: { program_name } };"
+      }
+    },
+    {
+      "id": "qa-node-03",
+      "name": "Busca Datos Programa",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-720, 80],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  p.id                       AS program_id,\n  p.program_name,\n  p.original_code,\n  pv.id                      AS version_id,\n  COALESCE(pv.checksum, '')  AS current_checksum,\n  cgs.status                 AS audit_status,\n  cgs.generated_for_checksum AS cached_checksum,\n  cgs.output_id              AS existing_audit_id\nFROM cobol_analysis.programs p\nJOIN LATERAL (\n  SELECT id, checksum\n  FROM   cobol_analysis.program_versions\n  WHERE  program_id = p.id\n  ORDER  BY version_number DESC\n  LIMIT  1\n) pv ON true\nLEFT JOIN cobol_analysis.content_generation_status cgs\n  ON  cgs.program_id   = p.id\n  AND cgs.content_type = 'quality_audit'\nWHERE p.program_name = '{{ $('Extrae Params').first().json.program_name }}'",
+        "options": {}
+      }
+    },
+    {
+      "id": "qa-node-04",
+      "name": "Evalúa Caché",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-480, 80],
+      "parameters": {
+        "jsCode": "const row = $input.first().json;\n\nif (!row.program_id) {\n  throw new Error(`Programa '${$('Extrae Params').first().json.program_name}' no encontrado`);\n}\n\nconst use_cache = (\n  row.audit_status === 'completed' &&\n  row.cached_checksum === row.current_checksum &&\n  row.existing_audit_id != null\n);\n\nreturn { json: { ...row, use_cache } };"
+      }
+    },
+    {
+      "id": "qa-node-05",
+      "name": "¿Usar caché?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [-240, 80],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "loose", "version": 3 },
+          "conditions": [
+            {
+              "id": "cond-cache",
+              "leftValue": "={{ $json.use_cache }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "qa-node-06",
+      "name": "Fetch Audit Existente",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [0, -160],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  id, program_name, overall_score,\n  findings, content_html, generated_at\nFROM cobol_analysis.quality_audits\nWHERE id = {{ $('Evalúa Caché').first().json.existing_audit_id }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "qa-node-07",
+      "name": "Formatea Respuesta Caché",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, -160],
+      "parameters": {
+        "jsCode": "const row = $input.first().json;\nreturn {\n  json: {\n    success:      true,\n    from_cache:   true,\n    program_name: row.program_name,\n    overall_score:row.overall_score,\n    audit:        row.findings,\n    content_html: row.content_html,\n    generated_at: row.generated_at\n  }\n};"
+      }
+    },
+    {
+      "id": "qa-node-08",
+      "name": "Marca In Progress",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [0, 280],
+      "alwaysOutputData": true,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE cobol_analysis.content_generation_status\nSET\n  status             = 'in_progress',\n  n8n_execution_id   = '{{ $execution.id }}',\n  updated_at         = NOW()\nWHERE program_id   = {{ $('Evalúa Caché').first().json.program_id }}\n  AND content_type = 'quality_audit'",
+        "options": {}
+      }
+    },
+    {
+      "id": "qa-node-09",
+      "name": "Computa Métricas COBOL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 280],
+      "parameters": {
+        "jsCode": "const prog = $('Evalúa Caché').first().json;\nconst code = prog.original_code || '';\nconst lines = code.split('\\n');\n\n// Líneas de comentario (col 7 = '*' o '/')\nconst commentLines = lines.filter(l => l.length >= 7 && (l[6] === '*' || l[6] === '/')).length;\nconst codeLines = lines.length - commentLines;\nconst commentRatio = lines.length > 0 ? Math.round((commentLines / lines.length) * 100) : 0;\n\n// GO TO\nconst gotoCount = (code.match(/\\bGO\\s*TO\\b/gi) || []).length;\nconst gotoLines = [];\nlines.forEach((l, i) => { if (/\\bGO\\s*TO\\b/i.test(l)) gotoLines.push(i + 1); });\n\n// PERFORM\nconst performCount = (code.match(/\\bPERFORM\\b/gi) || []).length;\n\n// Párrafos en PROCEDURE DIVISION\nconst paragraphs = [];\nlet inProcedure = false;\nlines.forEach((line, idx) => {\n  if (/\\bPROCEDURE\\s+DIVISION\\b/i.test(line)) { inProcedure = true; return; }\n  if (!inProcedure) return;\n  if (line.length >= 7 && (line[6] === '*' || line[6] === '/')) return;\n  const m = line.match(/^[\\s]{0,11}([A-Z][A-Z0-9-]*)\\.[\\s]*$/);\n  if (m) paragraphs.push({ name: m[1].toUpperCase(), line: idx + 1 });\n});\n\n// Párrafos referenciados\nconst referenced = new Set();\nlines.forEach(line => {\n  const m = line.match(/\\bPERFORM\\s+([A-Z][A-Z0-9-]*)/gi);\n  if (m) m.forEach(p => referenced.add(p.replace(/PERFORM\\s+/i, '').trim().toUpperCase()));\n});\nconst deadParagraphs = paragraphs\n  .filter(p => !referenced.has(p.name))\n  .map(p => `${p.name} (línea ${p.line})`);\n\n// SQL\nconst execSqlCount = (code.match(/\\bEXEC\\s+SQL\\b/gi) || []).length;\n\n// Manejo de errores\nconst checksFileStatus = /FILE[\\s-]STATUS/i.test(code);\nconst checksSqlCode   = /\\bSQLCODE\\b/i.test(code);\n\n// EVALUATE (buen indicador de estructura)\nconst evaluateCount = (code.match(/\\bEVALUATE\\b/gi) || []).length;\n\nreturn {\n  json: {\n    program_id:       prog.program_id,\n    program_name:     prog.program_name,\n    version_id:       prog.version_id,\n    current_checksum: prog.current_checksum,\n    original_code:    code,\n    metrics: {\n      total_lines:        lines.length,\n      code_lines:         codeLines,\n      comment_lines:      commentLines,\n      comment_ratio:      commentRatio,\n      goto_count:         gotoCount,\n      goto_lines:         gotoLines,\n      perform_count:      performCount,\n      paragraph_count:    paragraphs.length,\n      dead_paragraphs:    deadParagraphs,\n      exec_sql_count:     execSqlCount,\n      checks_file_status: checksFileStatus,\n      checks_sqlcode:     checksSqlCode,\n      evaluate_count:     evaluateCount\n    }\n  }\n};"
+      }
+    },
+    {
+      "id": "qa-node-10",
+      "name": "Gemini Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [480, 480],
+      "parameters": {
+        "modelName": "models/gemini-2.0-flash",
+        "options": {}
+      }
+    },
+    {
+      "id": "qa-node-11",
+      "name": "LLM Genera Audit",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [480, 280],
+      "parameters": {
+        "promptType": "define",
+        "text": "=Eres un experto en COBOL con amplia experiencia en sistemas mainframe IBM.\nAnalizá el siguiente programa COBOL y generá un reporte de auditoría de calidad de código.\n\nPROGRAMA: {{ $json.program_name }}\n\nMÉTRICAS PRE-CALCULADAS:\n- Total líneas: {{ $json.metrics.total_lines }}\n- Líneas de código (sin comentarios): {{ $json.metrics.code_lines }}\n- Ratio de comentarios: {{ $json.metrics.comment_ratio }}%\n- Cantidad de GO TO: {{ $json.metrics.goto_count }}{{ $json.metrics.goto_lines.length > 0 ? ' (líneas: ' + $json.metrics.goto_lines.join(', ') + ')' : '' }}\n- Cantidad de PERFORM: {{ $json.metrics.perform_count }}\n- Cantidad de párrafos: {{ $json.metrics.paragraph_count }}\n- Párrafos sin referencia (posible dead code): {{ $json.metrics.dead_paragraphs.length > 0 ? $json.metrics.dead_paragraphs.join(', ') : 'ninguno detectado' }}\n- Sentencias EXEC SQL: {{ $json.metrics.exec_sql_count }}\n- Verifica FILE STATUS: {{ $json.metrics.checks_file_status ? 'Sí' : 'No' }}\n- Verifica SQLCODE: {{ $json.metrics.checks_sqlcode ? 'Sí' : 'No' }}\n- Uso de EVALUATE: {{ $json.metrics.evaluate_count }} veces\n\nCÓDIGO FUENTE:\n{{ $json.original_code }}\n\nGenerá SOLO un JSON válido, sin markdown ni texto extra, con esta estructura:\n{\n  \"overall_score\": <entero 0-100 donde 100 es código perfecto>,\n  \"complexity\": \"<baja|media|alta|muy alta>\",\n  \"summary\": \"<resumen ejecutivo de 2-3 oraciones sobre la calidad general del programa>\",\n  \"strengths\": [\"<fortaleza 1>\", \"<fortaleza 2>\"],\n  \"findings\": [\n    {\n      \"category\": \"<go_to|dead_code|error_handling|naming|structure|comments|complexity|sql|performance>\",\n      \"severity\": \"<critical|high|medium|low>\",\n      \"description\": \"<descripción clara del hallazgo en español>\",\n      \"detail\": \"<detalle técnico, nombre de párrafo o fragmento de código relevante>\"\n    }\n  ],\n  \"recommendations\": [\"<recomendación accionable 1>\", \"<recomendación accionable 2>\"]\n}",
+        "batching": {}
+      }
+    },
+    {
+      "id": "qa-node-12",
+      "name": "Parsea y Genera HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 280],
+      "parameters": {
+        "jsCode": "const chainOut = $input.first().json;\nconst prog     = $('Computa Métricas COBOL').first().json;\n\n// Limpia respuesta LLM\nlet raw = (chainOut.text || chainOut.output || '').trim();\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/```\\s*$/i, '').trim();\n\nlet audit;\ntry {\n  audit = JSON.parse(raw);\n} catch(e) {\n  throw new Error(`LLM no devolvió JSON válido: ${e.message}. Inicio respuesta: ${raw.substring(0, 300)}`);\n}\n\nconst m = prog.metrics;\n\n// Colores\nconst scoreColor = audit.overall_score >= 80 ? '#16a34a'\n                 : audit.overall_score >= 60 ? '#d97706' : '#dc2626';\nconst sevColor   = { critical: '#dc2626', high: '#ea580c', medium: '#d97706', low: '#65a30d' };\nconst sevLabel   = { critical: 'Crítico', high: 'Alto', medium: 'Medio', low: 'Bajo' };\n\nconst findingsHtml = (audit.findings || []).map(f => `\n  <div class=\"finding sev-${f.severity}\">\n    <span class=\"badge\" style=\"background:${sevColor[f.severity] || '#6b7280'}\">${sevLabel[f.severity] || f.severity}</span>\n    <strong>${f.description}</strong>\n    ${f.detail ? `<p class=\"detail\">${f.detail}</p>` : ''}\n  </div>`).join('');\n\nconst content_html = `<!DOCTYPE html>\n<html lang=\"es\">\n<head><meta charset=\"UTF-8\">\n<style>\n  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:24px;background:#f9fafb;color:#111;}\n  .header{display:flex;align-items:flex-start;gap:20px;margin-bottom:20px;}\n  .score-circle{width:80px;height:80px;border-radius:50%;background:${scoreColor};color:#fff;display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:bold;flex-shrink:0;}\n  .program-info h1{margin:0 0 4px;font-size:20px;}\n  .program-info .meta{color:#6b7280;font-size:13px;}\n  .program-info .summary{margin-top:8px;font-size:14px;line-height:1.5;}\n  .metrics-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:20px;}\n  .mc{background:#fff;border-radius:8px;padding:12px;box-shadow:0 1px 3px rgba(0,0,0,.08);}\n  .mc .val{font-size:24px;font-weight:700;}\n  .mc .lbl{font-size:11px;color:#6b7280;margin-top:2px;}\n  .mc.warn .val{color:#dc2626;}\n  .mc.ok   .val{color:#16a34a;}\n  section{background:#fff;border-radius:8px;padding:16px;margin-bottom:14px;box-shadow:0 1px 3px rgba(0,0,0,.08);}\n  section h2{margin:0 0 12px;font-size:15px;border-bottom:1px solid #e5e7eb;padding-bottom:8px;}\n  .finding{border-left:3px solid #e5e7eb;padding:8px 12px;margin-bottom:8px;}\n  .finding .detail{margin:4px 0 0;font-size:12px;color:#6b7280;font-family:monospace;background:#f3f4f6;padding:4px 8px;border-radius:4px;}\n  .badge{display:inline-block;padding:2px 8px;border-radius:4px;color:#fff;font-size:11px;font-weight:600;margin-right:8px;}\n  ul{margin:0;padding-left:20px;}li{margin-bottom:6px;font-size:14px;}\n  .tag{display:inline-block;background:#e0f2fe;color:#0369a1;padding:1px 6px;border-radius:3px;font-size:11px;margin-right:4px;}\n</style>\n</head>\n<body>\n<div class=\"header\">\n  <div class=\"score-circle\">${audit.overall_score}</div>\n  <div class=\"program-info\">\n    <h1>${prog.program_name}</h1>\n    <p class=\"meta\">Complejidad: ${audit.complexity || '-'} &nbsp;|&nbsp; Generado: ${new Date().toLocaleDateString('es-AR')}</p>\n    <p class=\"summary\">${audit.summary || ''}</p>\n  </div>\n</div>\n\n<div class=\"metrics-grid\">\n  <div class=\"mc\"><div class=\"val\">${m.total_lines}</div><div class=\"lbl\">Líneas totales</div></div>\n  <div class=\"mc\"><div class=\"val\">${m.comment_ratio}%</div><div class=\"lbl\">Comentarios</div></div>\n  <div class=\"mc ${m.goto_count > 0 ? 'warn' : 'ok'}\"><div class=\"val\">${m.goto_count}</div><div class=\"lbl\">GO TO</div></div>\n  <div class=\"mc\"><div class=\"val\">${m.paragraph_count}</div><div class=\"lbl\">Párrafos</div></div>\n  <div class=\"mc ${m.dead_paragraphs.length > 0 ? 'warn' : 'ok'}\"><div class=\"val\">${m.dead_paragraphs.length}</div><div class=\"lbl\">Dead code</div></div>\n  <div class=\"mc\"><div class=\"val\">${m.exec_sql_count}</div><div class=\"lbl\">EXEC SQL</div></div>\n  <div class=\"mc ${m.checks_file_status ? 'ok' : 'warn'}\"><div class=\"val\">${m.checks_file_status ? '✓' : '✗'}</div><div class=\"lbl\">FILE STATUS</div></div>\n  <div class=\"mc ${m.checks_sqlcode ? 'ok' : (m.exec_sql_count > 0 ? 'warn' : '')}\"><div class=\"val\">${m.checks_sqlcode ? '✓' : '✗'}</div><div class=\"lbl\">SQLCODE</div></div>\n</div>\n\n${audit.findings && audit.findings.length > 0 ? `\n<section>\n  <h2>Hallazgos (${audit.findings.length})</h2>\n  ${findingsHtml}\n</section>` : ''}\n\n${audit.strengths && audit.strengths.length > 0 ? `\n<section>\n  <h2>Fortalezas</h2>\n  <ul>${(audit.strengths).map(s => `<li>${s}</li>`).join('')}</ul>\n</section>` : ''}\n\n${audit.recommendations && audit.recommendations.length > 0 ? `\n<section>\n  <h2>Recomendaciones</h2>\n  <ul>${(audit.recommendations).map(r => `<li>${r}</li>`).join('')}</ul>\n</section>` : ''}\n\n</body></html>`;\n\nreturn {\n  json: {\n    program_id:       prog.program_id,\n    program_name:     prog.program_name,\n    version_id:       prog.version_id,\n    current_checksum: prog.current_checksum,\n    overall_score:    audit.overall_score,\n    findings_json:    JSON.stringify(audit),\n    metrics_json:     JSON.stringify(m),\n    content_html\n  }\n};"
+      }
+    },
+    {
+      "id": "qa-node-13",
+      "name": "INSERT quality_audits",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [960, 280],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO cobol_analysis.quality_audits\n  (program_id, program_name, version_id, overall_score, findings, content_html, generated_at)\nVALUES ($1, $2, $3, $4, $5, $6, NOW())\nRETURNING id AS audit_id",
+        "options": {
+          "queryReplacement": "={{ $json.program_id }}, {{ $json.program_name }}, {{ $json.version_id }}, {{ $json.overall_score }}, {{ $json.findings_json }}, {{ $json.content_html }}"
+        }
+      }
+    },
+    {
+      "id": "qa-node-14",
+      "name": "UPDATE Status Completado",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1200, 280],
+      "alwaysOutputData": true,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE cobol_analysis.content_generation_status\nSET\n  status                 = 'completed',\n  generated_at           = NOW(),\n  generated_for_checksum = '{{ $('Parsea y Genera HTML').first().json.current_checksum }}',\n  output_table           = 'quality_audits',\n  output_id              = {{ $json.audit_id }},\n  n8n_execution_id       = '{{ $execution.id }}',\n  updated_at             = NOW()\nWHERE program_id   = {{ $('Parsea y Genera HTML').first().json.program_id }}\n  AND content_type = 'quality_audit'",
+        "options": {}
+      }
+    },
+    {
+      "id": "qa-node-15",
+      "name": "Formatea Respuesta Nueva",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 280],
+      "parameters": {
+        "jsCode": "const parsed = $('Parsea y Genera HTML').first().json;\nconst audit   = JSON.parse(parsed.findings_json);\n\nreturn {\n  json: {\n    success:      true,\n    from_cache:   false,\n    program_name: parsed.program_name,\n    overall_score:parsed.overall_score,\n    audit,\n    metrics:      JSON.parse(parsed.metrics_json),\n    content_html: parsed.content_html,\n    generated_at: new Date().toISOString()\n  }\n};"
+      }
+    },
+    {
+      "id": "qa-node-16",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [1680, 80],
+      "parameters": {
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Extrae Params", "type": "main", "index": 0 }]]
+    },
+    "Extrae Params": {
+      "main": [[{ "node": "Busca Datos Programa", "type": "main", "index": 0 }]]
+    },
+    "Busca Datos Programa": {
+      "main": [[{ "node": "Evalúa Caché", "type": "main", "index": 0 }]]
+    },
+    "Evalúa Caché": {
+      "main": [[{ "node": "¿Usar caché?", "type": "main", "index": 0 }]]
+    },
+    "¿Usar caché?": {
+      "main": [
+        [{ "node": "Fetch Audit Existente", "type": "main", "index": 0 }],
+        [{ "node": "Marca In Progress",     "type": "main", "index": 0 }]
+      ]
+    },
+    "Fetch Audit Existente": {
+      "main": [[{ "node": "Formatea Respuesta Caché", "type": "main", "index": 0 }]]
+    },
+    "Formatea Respuesta Caché": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    },
+    "Marca In Progress": {
+      "main": [[{ "node": "Computa Métricas COBOL", "type": "main", "index": 0 }]]
+    },
+    "Computa Métricas COBOL": {
+      "main": [[{ "node": "LLM Genera Audit", "type": "main", "index": 0 }]]
+    },
+    "Gemini Chat Model": {
+      "ai_languageModel": [[{ "node": "LLM Genera Audit", "type": "ai_languageModel", "index": 0 }]]
+    },
+    "LLM Genera Audit": {
+      "main": [[{ "node": "Parsea y Genera HTML", "type": "main", "index": 0 }]]
+    },
+    "Parsea y Genera HTML": {
+      "main": [[{ "node": "INSERT quality_audits", "type": "main", "index": 0 }]]
+    },
+    "INSERT quality_audits": {
+      "main": [[{ "node": "UPDATE Status Completado", "type": "main", "index": 0 }]]
+    },
+    "UPDATE Status Completado": {
+      "main": [[{ "node": "Formatea Respuesta Nueva", "type": "main", "index": 0 }]]
+    },
+    "Formatea Respuesta Nueva": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

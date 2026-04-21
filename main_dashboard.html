@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Forensic Architect | Legacy System Analysis</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&amp;family=JetBrains+Mono:wght@400;500;700&amp;family=Space+Grotesk:wght@500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "surface-container-lowest": "#060e20",
+                    "surface-variant": "#2d3449",
+                    "tertiary-container": "#001c18",
+                    "error-container": "#93000a",
+                    "surface-tint": "#7bd0ff",
+                    "primary-container": "#001a27",
+                    "on-surface-variant": "#c6c6cd",
+                    "inverse-surface": "#dae2fd",
+                    "on-primary-container": "#008abb",
+                    "on-primary": "#00354a",
+                    "on-primary-fixed": "#001e2c",
+                    "surface-container-highest": "#2d3449",
+                    "error": "#ffb4ab",
+                    "inverse-primary": "#00668a",
+                    "tertiary": "#3cddc7",
+                    "outline": "#909097",
+                    "secondary-container": "#3e495d",
+                    "on-error": "#690005",
+                    "on-secondary-container": "#aeb9d0",
+                    "tertiary-fixed-dim": "#3cddc7",
+                    "on-error-container": "#ffdad6",
+                    "surface-bright": "#31394d",
+                    "surface-container-low": "#131b2e",
+                    "on-tertiary-container": "#009182",
+                    "surface": "#0b1326",
+                    "secondary-fixed-dim": "#bcc7de",
+                    "primary": "#7bd0ff",
+                    "surface-container": "#171f33",
+                    "on-secondary-fixed-variant": "#3c475a",
+                    "on-secondary": "#263143",
+                    "outline-variant": "#45464d",
+                    "tertiary-fixed": "#62fae3",
+                    "on-secondary-fixed": "#111c2d",
+                    "surface-dim": "#0b1326",
+                    "on-primary-fixed-variant": "#004c69",
+                    "primary-fixed-dim": "#7bd0ff",
+                    "inverse-on-surface": "#283044",
+                    "on-tertiary-fixed": "#00201c",
+                    "on-tertiary": "#003731",
+                    "on-background": "#dae2fd",
+                    "on-tertiary-fixed-variant": "#005047",
+                    "surface-container-high": "#222a3d",
+                    "secondary-fixed": "#d8e3fb",
+                    "primary-fixed": "#c4e7ff",
+                    "on-surface": "#dae2fd",
+                    "background": "#0b1326",
+                    "secondary": "#bcc7de"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.125rem",
+                    "lg": "0.25rem",
+                    "xl": "0.5rem",
+                    "full": "0.75rem"
+            },
+            "fontFamily": {
+                    "headline": ["Inter"],
+                    "body": ["Inter"],
+                    "label": ["Space Grotesk"],
+                    "mono": ["JetBrains Mono"]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+      .material-symbols-outlined {
+        font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+      }
+      .glass-panel {
+        background-color: rgba(45, 52, 73, 0.6);
+        backdrop-filter: blur(20px);
+      }
+      .gradient-cta {
+        background: linear-gradient(135deg, #7bd0ff 0%, #008abb 100%);
+      }
+      .recessed-area {
+        background-color: #060e20;
+        box-shadow: inset 0 2px 4px rgba(0,0,0,0.3);
+      }
+    </style>
+</head>
+<body class="bg-background text-on-surface font-body selection:bg-primary/30">
+<!-- TopNavBar (JSON Anchor) -->
+<header class="w-full h-14 sticky top-0 z-50 bg-[#0b1326] flex justify-between items-center px-6">
+<div class="flex items-center space-x-4">
+<span class="font-['Inter'] text-lg font-black tracking-tighter text-[#dae2fd]">Forensic Architect</span>
+<div class="ml-8 flex space-x-1 recessed-area rounded px-2 py-1 items-center border border-outline-variant/15">
+<span class="material-symbols-outlined text-outline/50 text-sm">search</span>
+<input class="bg-transparent border-none focus:ring-0 text-xs font-mono text-on-surface-variant w-48 py-0" placeholder="Search Program ID..." type="text"/>
+</div>
+</div>
+<div class="flex items-center space-x-4">
+<div class="flex space-x-2">
+<button class="p-1.5 hover:bg-[#171f33] transition-colors duration-200 cursor-pointer active:opacity-80 rounded">
+<span class="material-symbols-outlined text-[#dae2fd]/60 text-lg">terminal</span>
+</button>
+<button class="p-1.5 hover:bg-[#171f33] transition-colors duration-200 cursor-pointer active:opacity-80 rounded">
+<span class="material-symbols-outlined text-[#dae2fd]/60 text-lg">settings</span>
+</button>
+<button class="p-1.5 hover:bg-[#171f33] transition-colors duration-200 cursor-pointer active:opacity-80 rounded">
+<span class="material-symbols-outlined text-[#dae2fd]/60 text-lg">help</span>
+</button>
+</div>
+<div class="h-8 w-8 rounded-full bg-surface-container-high border border-outline-variant/20 overflow-hidden">
+<img class="w-full h-full object-cover" data-alt="Analyst profile avatar in a high-tech data lab environment with cool blue lighting" src="https://lh3.googleusercontent.com/aida-public/AB6AXuC8lL0DNFovRxT_JuZ8yhMnfpHvCf3x3cHrghH8pCYndnJuLcDzsRfiQSD-FCd3yGGbvln7JxGCOTy_ZvgFjr0FsgioWu3lqbTaSWP-ZDqYe2rwRy0AG-q2Hv24EbZyh0LxUSPAAyM8Ntuqr_RZbBCBDx4glg6HR6s-EX2bAiNNwz2t77Qo2uZyLlam1vIYiRbWfYwykJByHAvHq-C_iPLgHy-lB_sHo09beAX5_4jYk5z511XRFrU7JrawGINBswd0NEgKslsuBDx0"/>
+</div>
+</div>
+</header>
+<div class="flex">
+<!-- SideNavBar (JSON Anchor) -->
+<aside class="w-64 h-screen fixed left-0 top-0 pt-14 border-r border-[#45464d]/15 bg-[#131b2e] flex flex-col py-6 space-y-2">
+<div class="px-6 mb-6">
+<h2 class="font-headline text-xs font-bold uppercase tracking-widest text-primary/70">System Audit</h2>
+<p class="font-label text-[0.65rem] text-on-surface-variant/40">V-1.0.2-Stable</p>
+</div>
+<nav class="flex-1 space-y-1">
+<!-- Active Tab: Overview -->
+<a class="bg-[#171f33] text-[#7bd0ff] border-r-4 border-[#7bd0ff] px-4 py-3 flex items-center space-x-3 cursor-pointer" href="#">
+<span class="material-symbols-outlined">dashboard</span>
+<span class="font-['Inter'] text-[0.875rem] font-semibold">Overview</span>
+</a>
+<a class="text-[#dae2fd]/70 px-4 py-3 flex items-center space-x-3 hover:bg-[#171f33] hover:text-[#dae2fd] transition-all duration-150 cursor-pointer" href="#">
+<span class="material-symbols-outlined">account_tree</span>
+<span class="font-['Inter'] text-[0.875rem] font-medium">Impact Analysis</span>
+</a>
+<a class="text-[#dae2fd]/70 px-4 py-3 flex items-center space-x-3 hover:bg-[#171f33] hover:text-[#dae2fd] transition-all duration-150 cursor-pointer" href="#">
+<span class="material-symbols-outlined">verified_user</span>
+<span class="font-['Inter'] text-[0.875rem] font-medium">Quality Audit</span>
+</a>
+<a class="text-[#dae2fd]/70 px-4 py-3 flex items-center space-x-3 hover:bg-[#171f33] hover:text-[#dae2fd] transition-all duration-150 cursor-pointer" href="#">
+<span class="material-symbols-outlined">menu_book</span>
+<span class="font-['Inter'] text-[0.875rem] font-medium">Documentation</span>
+</a>
+</nav>
+<div class="px-4 mt-auto">
+<button class="w-full gradient-cta text-on-primary py-2.5 rounded-sm text-sm font-bold tracking-tight mb-4 flex items-center justify-center space-x-2">
+<span class="material-symbols-outlined text-sm">play_arrow</span>
+<span>Start Analysis</span>
+</button>
+<a class="text-[#dae2fd]/70 px-4 py-3 flex items-center space-x-3 hover:bg-error-container/20 hover:text-error transition-all duration-150 cursor-pointer" href="#">
+<span class="material-symbols-outlined">logout</span>
+<span class="font-['Inter'] text-[0.875rem] font-medium">Log Out</span>
+</a>
+</div>
+</aside>
+<!-- Main Content Canvas -->
+<main class="ml-64 flex-1 min-h-screen p-8 bg-background">
+<!-- Top Section: Hard Metrics -->
+<section class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
+<div class="bg-surface-container-high p-5 rounded border-l-2 border-primary/40 flex flex-col justify-between">
+<span class="font-label text-[0.7rem] uppercase tracking-[0.15em] text-outline">Total Programs</span>
+<div class="flex items-baseline space-x-2 mt-2">
+<span class="font-mono text-3xl font-bold text-on-surface">1,432</span>
+<span class="text-tertiary text-xs font-medium font-mono">+12</span>
+</div>
+<div class="w-full bg-surface-container-low h-1 mt-4">
+<div class="bg-primary h-full w-2/3"></div>
+</div>
+</div>
+<div class="bg-surface-container-high p-5 rounded border-l-2 border-secondary/40 flex flex-col justify-between">
+<span class="font-label text-[0.7rem] uppercase tracking-[0.15em] text-outline">Lines of Code</span>
+<div class="flex items-baseline space-x-2 mt-2">
+<span class="font-mono text-3xl font-bold text-on-surface">4.2M</span>
+<span class="text-on-surface-variant/40 text-xs font-mono">COBOL-74</span>
+</div>
+<div class="w-full bg-surface-container-low h-1 mt-4">
+<div class="bg-secondary h-full w-4/5"></div>
+</div>
+</div>
+<div class="bg-surface-container-high p-5 rounded border-l-2 border-error/40 flex flex-col justify-between">
+<span class="font-label text-[0.7rem] uppercase tracking-[0.15em] text-outline">Error Count</span>
+<div class="flex items-baseline space-x-2 mt-2">
+<span class="font-mono text-3xl font-bold text-error">284</span>
+<span class="text-error text-xs font-medium font-mono">▲ 4%</span>
+</div>
+<div class="w-full bg-surface-container-low h-1 mt-4">
+<div class="bg-error h-full w-1/4"></div>
+</div>
+</div>
+</section>
+<!-- Middle Section: Asymmetric Distribution and Gauge -->
+<section class="grid grid-cols-1 lg:grid-cols-12 gap-8 mb-10">
+<!-- Program Type Distribution -->
+<div class="lg:col-span-7 bg-surface-container p-6 rounded">
+<div class="flex justify-between items-center mb-8">
+<h3 class="font-headline text-sm font-bold uppercase tracking-widest text-[#dae2fd]">Program Type Distribution</h3>
+<span class="material-symbols-outlined text-outline cursor-pointer">more_horiz</span>
+</div>
+<div class="flex items-center justify-around h-64">
+<div class="relative w-48 h-48 rounded-full border-[12px] border-surface-container-low flex items-center justify-center">
+<div class="absolute inset-0 rounded-full border-[12px] border-primary border-t-transparent border-r-transparent transform -rotate-45"></div>
+<div class="absolute inset-0 rounded-full border-[12px] border-tertiary border-b-transparent border-l-transparent transform rotate-12"></div>
+<div class="text-center">
+<span class="block font-mono text-2xl font-bold">5.2k</span>
+<span class="font-label text-[0.6rem] uppercase tracking-tighter text-outline">Modules</span>
+</div>
+</div>
+<div class="space-y-4">
+<div class="flex items-center space-x-3">
+<div class="w-3 h-3 bg-primary rounded-sm"></div>
+<div>
+<p class="text-xs font-bold">Batch Processing</p>
+<p class="font-mono text-[0.65rem] text-outline">2,841 Units (54%)</p>
+</div>
+</div>
+<div class="flex items-center space-x-3">
+<div class="w-3 h-3 bg-tertiary rounded-sm"></div>
+<div>
+<p class="text-xs font-bold">CICS Transaction</p>
+<p class="font-mono text-[0.65rem] text-outline">1,204 Units (23%)</p>
+</div>
+</div>
+<div class="flex items-center space-x-3">
+<div class="w-3 h-3 bg-secondary rounded-sm"></div>
+<div>
+<p class="text-xs font-bold">Database IO</p>
+<p class="font-mono text-[0.65rem] text-outline">892 Units (17%)</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- System Health Gauge -->
+<div class="lg:col-span-5 glass-panel p-8 rounded relative overflow-hidden flex flex-col items-center justify-center border border-outline-variant/10">
+<div class="absolute top-0 left-0 w-full h-1 gradient-cta opacity-50"></div>
+<h3 class="font-headline text-sm font-bold uppercase tracking-widest text-[#dae2fd] self-start mb-6">System Health</h3>
+<div class="relative">
+<svg class="w-48 h-48 transform -rotate-90">
+<circle class="text-surface-container-low" cx="96" cy="96" fill="transparent" r="88" stroke="currentColor" stroke-width="8"></circle>
+<circle class="text-secondary" cx="96" cy="96" fill="transparent" r="88" stroke="currentColor" stroke-dasharray="552.92" stroke-dashoffset="176.93" stroke-linecap="round" stroke-width="12"></circle>
+</svg>
+<div class="absolute inset-0 flex flex-col items-center justify-center">
+<span class="font-headline text-5xl font-black text-secondary">68%</span>
+<span class="font-label text-[0.7rem] uppercase tracking-widest text-secondary mt-1">Moderate</span>
+</div>
+</div>
+<div class="mt-8 grid grid-cols-2 gap-4 w-full">
+<div class="recessed-area p-3 rounded">
+<p class="font-label text-[0.6rem] text-outline uppercase tracking-tighter">Cyclomatic</p>
+<p class="font-mono text-sm font-bold text-tertiary">142.4</p>
+</div>
+<div class="recessed-area p-3 rounded">
+<p class="font-label text-[0.6rem] text-outline uppercase tracking-tighter">Stability</p>
+<p class="font-mono text-sm font-bold text-primary">Stable</p>
+</div>
+</div>
+</div>
+</section>
+<!-- Bottom Section: Chaos Ranking Table -->
+<section class="bg-surface-container-low rounded overflow-hidden">
+<div class="p-6 border-b border-outline-variant/10 flex justify-between items-center">
+<div>
+<h3 class="font-headline text-sm font-bold uppercase tracking-widest text-[#dae2fd]">Chaos Ranking</h3>
+<p class="text-[0.75rem] text-outline mt-1">Top critical legacy assets requiring refactor attention</p>
+</div>
+<div class="flex space-x-2">
+<button class="bg-surface-container-high px-3 py-1.5 rounded text-[0.7rem] font-bold text-on-surface-variant flex items-center space-x-1">
+<span class="material-symbols-outlined text-xs">filter_list</span>
+<span>Filter</span>
+</button>
+<button class="bg-surface-container-high px-3 py-1.5 rounded text-[0.7rem] font-bold text-on-surface-variant flex items-center space-x-1">
+<span class="material-symbols-outlined text-xs">download</span>
+<span>Export CSV</span>
+</button>
+</div>
+</div>
+<div class="overflow-x-auto">
+<table class="w-full text-left border-collapse">
+<thead>
+<tr class="font-label text-[0.65rem] uppercase tracking-widest text-outline border-b border-outline-variant/5">
+<th class="px-6 py-4 font-medium">Program ID</th>
+<th class="px-6 py-4 font-medium">Criticality</th>
+<th class="px-6 py-4 font-medium">Complexity</th>
+<th class="px-6 py-4 font-medium">Status</th>
+<th class="px-6 py-4 font-medium text-right">Action</th>
+</tr>
+</thead>
+<tbody class="font-mono text-[0.8rem]">
+<!-- Row 1: Critical -->
+<tr class="hover:bg-surface-container-high transition-colors group cursor-pointer">
+<td class="px-6 py-5 text-on-surface font-bold">PAYROLL_MAIN_PROC</td>
+<td class="px-6 py-5">
+<span class="text-error bg-error/10 px-2 py-0.5 rounded text-[0.7rem]">CRITICAL</span>
+</td>
+<td class="px-6 py-5">
+<div class="flex items-center space-x-2">
+<span class="text-on-surface">4,812</span>
+<div class="w-16 h-1 bg-surface-container-lowest rounded-full overflow-hidden">
+<div class="h-full bg-error w-[90%]"></div>
+</div>
+</div>
+</td>
+<td class="px-6 py-5">
+<div class="flex items-center space-x-2">
+<div class="w-2.5 h-2.5 rounded-full bg-error shadow-[0_0_8px_rgba(255,180,171,0.6)]"></div>
+<span class="text-[0.7rem] uppercase tracking-tighter text-outline-variant">Emergency Action Required</span>
+</div>
+</td>
+<td class="px-6 py-5 text-right">
+<span class="material-symbols-outlined text-outline group-hover:text-primary transition-colors">open_in_new</span>
+</td>
+</tr>
+<!-- Row 2: High Risk -->
+<tr class="hover:bg-surface-container-high transition-colors group cursor-pointer">
+<td class="px-6 py-5 text-on-surface font-bold">TX_AUDIT_LEDGER_74</td>
+<td class="px-6 py-5">
+<span class="text-secondary bg-secondary/10 px-2 py-0.5 rounded text-[0.7rem]">HIGH RISK</span>
+</td>
+<td class="px-6 py-5">
+<div class="flex items-center space-x-2">
+<span class="text-on-surface">3,120</span>
+<div class="w-16 h-1 bg-surface-container-lowest rounded-full overflow-hidden">
+<div class="h-full bg-secondary w-[65%]"></div>
+</div>
+</div>
+</td>
+<td class="px-6 py-5">
+<div class="flex items-center space-x-2">
+<div class="w-2.5 h-2.5 rounded-full bg-secondary"></div>
+<span class="text-[0.7rem] uppercase tracking-tighter text-outline-variant">Refactor Pending</span>
+</div>
+</td>
+<td class="px-6 py-5 text-right">
+<span class="material-symbols-outlined text-outline group-hover:text-primary transition-colors">open_in_new</span>
+</td>
+</tr>
+<!-- Row 3: Low Risk -->
+<tr class="hover:bg-surface-container-high transition-colors group cursor-pointer">
+<td class="px-6 py-5 text-on-surface font-bold">USER_SESSION_VALID</td>
+<td class="px-6 py-5">
+<span class="text-tertiary bg-tertiary/10 px-2 py-0.5 rounded text-[0.7rem]">LOW RISK</span>
+</td>
+<td class="px-6 py-5">
+<div class="flex items-center space-x-2">
+<span class="text-on-surface">412</span>
+<div class="w-16 h-1 bg-surface-container-lowest rounded-full overflow-hidden">
+<div class="h-full bg-tertiary w-[15%]"></div>
+</div>
+</div>
+</td>
+<td class="px-6 py-5">
+<div class="flex items-center space-x-2">
+<div class="w-2.5 h-2.5 rounded-full bg-tertiary"></div>
+<span class="text-[0.7rem] uppercase tracking-tighter text-outline-variant">Optimized</span>
+</div>
+</td>
+<td class="px-6 py-5 text-right">
+<span class="material-symbols-outlined text-outline group-hover:text-primary transition-colors">open_in_new</span>
+</td>
+</tr>
+<!-- Row 4: High Risk -->
+<tr class="hover:bg-surface-container-high transition-colors group cursor-pointer">
+<td class="px-6 py-5 text-on-surface font-bold">MVS_JOB_SCHEDULER</td>
+<td class="px-6 py-5">
+<span class="text-secondary bg-secondary/10 px-2 py-0.5 rounded text-[0.7rem]">HIGH RISK</span>
+</td>
+<td class="px-6 py-5">
+<div class="flex items-center space-x-2">
+<span class="text-on-surface">2,891</span>
+<div class="w-16 h-1 bg-surface-container-lowest rounded-full overflow-hidden">
+<div class="h-full bg-secondary w-[60%]"></div>
+</div>
+</div>
+</td>
+<td class="px-6 py-5">
+<div class="flex items-center space-x-2">
+<div class="w-2.5 h-2.5 rounded-full bg-secondary"></div>
+<span class="text-[0.7rem] uppercase tracking-tighter text-outline-variant">Queued</span>
+</div>
+</td>
+<td class="px-6 py-5 text-right">
+<span class="material-symbols-outlined text-outline group-hover:text-primary transition-colors">open_in_new</span>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="p-4 bg-surface-container-lowest flex justify-between items-center text-[0.65rem] font-label text-outline uppercase tracking-wider">
+<span>Showing 1-4 of 1,432 entries</span>
+<div class="flex space-x-4">
+<button class="hover:text-primary transition-colors">Previous</button>
+<button class="hover:text-primary transition-colors">Next</button>
+</div>
+</div>
+</section>
+</main>
+</div>
+<!-- Decorative Logic Heatmap Overlay (Bottom Corner) -->
+<div class="fixed bottom-6 right-6 w-40 h-40 bg-surface-container/80 backdrop-blur-md rounded border border-outline-variant/15 p-3 pointer-events-none hidden xl:block">
+<p class="font-label text-[0.55rem] text-outline uppercase mb-2">Complexity Grid</p>
+<div class="grid grid-cols-6 gap-1">
+<div class="w-full aspect-square bg-tertiary/60"></div>
+<div class="w-full aspect-square bg-tertiary/20"></div>
+<div class="w-full aspect-square bg-error/80"></div>
+<div class="w-full aspect-square bg-tertiary/40"></div>
+<div class="w-full aspect-square bg-secondary/60"></div>
+<div class="w-full aspect-square bg-tertiary/60"></div>
+<div class="w-full aspect-square bg-tertiary/20"></div>
+<div class="w-full aspect-square bg-secondary/80"></div>
+<div class="w-full aspect-square bg-error/60"></div>
+<div class="w-full aspect-square bg-tertiary/60"></div>
+<div class="w-full aspect-square bg-error/90"></div>
+<div class="w-full aspect-square bg-tertiary/40"></div>
+<div class="w-full aspect-square bg-error/50"></div>
+<div class="w-full aspect-square bg-tertiary/60"></div>
+<div class="w-full aspect-square bg-tertiary/80"></div>
+<div class="w-full aspect-square bg-error/70"></div>
+<div class="w-full aspect-square bg-secondary/40"></div>
+<div class="w-full aspect-square bg-tertiary/60"></div>
+<div class="w-full aspect-square bg-tertiary/80"></div>
+<div class="w-full aspect-square bg-error/90"></div>
+<div class="w-full aspect-square bg-tertiary/40"></div>
+<div class="w-full aspect-square bg-tertiary/60"></div>
+<div class="w-full aspect-square bg-secondary/60"></div>
+<div class="w-full aspect-square bg-tertiary/20"></div>
+<div class="w-full aspect-square bg-secondary/60"></div>
+<div class="w-full aspect-square bg-tertiary/60"></div>
+<div class="w-full aspect-square bg-error/40"></div>
+<div class="w-full aspect-square bg-tertiary/80"></div>
+<div class="w-full aspect-square bg-tertiary/60"></div>
+<div class="w-full aspect-square bg-tertiary/40"></div>
+<div class="w-full aspect-square bg-tertiary/60"></div>
+<div class="w-full aspect-square bg-tertiary/20"></div>
+<div class="w-full aspect-square bg-error/80"></div>
+<div class="w-full aspect-square bg-tertiary/40"></div>
+<div class="w-full aspect-square bg-secondary/60"></div>
+<div class="w-full aspect-square bg-tertiary/60"></div>
+</div>
+</div>
+</body></html>

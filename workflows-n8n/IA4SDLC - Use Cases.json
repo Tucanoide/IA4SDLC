@@ -1,0 +1,313 @@
+{
+  "name": "IA4SDLC - Use Cases",
+  "nodes": [
+    {
+      "id": "uc-note-00",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-1200, -340],
+      "parameters": {
+        "content": "## IA4SDLC - Use Cases\n\n**Scope:** Sistema completo (no por programa)\n**Output:** JSON estructurado + Markdown + HTML\n\n**El JSON es reutilizable por el Onboarding Generator.**\n\n**Fuente de datos:** metadata de todos los programas\n+ grafo de llamadas + archivos + tablas DB2.\nNo se usa código fuente (no es necesario).\n\n**Llamada:**\n```\nPOST /webhook/ia4sdlc-use-cases\n{}\n```\n(sin parámetros — siempre es el sistema completo)\n\n**Staleness:** se marca stale automáticamente\ncuando la ingesta procesa programas nuevos o modificados.",
+        "height": 320,
+        "width": 440,
+        "color": 7
+      }
+    },
+    {
+      "id": "uc-node-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [-1200, 80],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ia4sdlc-use-cases",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "uc-node-02",
+      "name": "Verifica Caché",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-960, 80],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  cgs.status,\n  cgs.output_id AS existing_id,\n  cgs.generated_at,\n  -- Verifica si algún programa cambió desde la última generación\n  EXISTS (\n    SELECT 1 FROM cobol_analysis.programs p\n    WHERE cgs.generated_at IS NOT NULL\n      AND p.updated_at > cgs.generated_at\n  ) AS has_changes\nFROM cobol_analysis.content_generation_status cgs\nWHERE cgs.content_type = 'use_cases'\n  AND cgs.scope        = 'system'\n  AND cgs.resource_key = 'system_use_cases'",
+        "options": {}
+      }
+    },
+    {
+      "id": "uc-node-03",
+      "name": "Evalúa Caché",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-720, 80],
+      "parameters": {
+        "jsCode": "const row = $input.first().json;\n\n// Usar caché si está completed Y no hubo cambios desde la generación\nconst use_cache = (\n  row.status === 'completed' &&\n  row.has_changes === false &&\n  row.existing_id != null\n);\n\nreturn { json: { ...row, use_cache } };"
+      }
+    },
+    {
+      "id": "uc-node-04",
+      "name": "¿Usar caché?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [-480, 80],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "loose", "version": 3 },
+          "conditions": [
+            {
+              "id": "cond-cache",
+              "leftValue": "={{ $json.use_cache }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "uc-node-05",
+      "name": "Fetch UC Existente",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-240, -160],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, content_md, content_html, use_cases_json, generated_at\nFROM cobol_analysis.use_cases\nWHERE id = {{ $('Evalúa Caché').first().json.existing_id }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "uc-node-06",
+      "name": "Formatea Respuesta Caché",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [0, -160],
+      "parameters": {
+        "jsCode": "const row = $input.first().json;\nreturn {\n  json: {\n    success:        true,\n    from_cache:     true,\n    use_cases_json: row.use_cases_json,\n    content_md:     row.content_md,\n    content_html:   row.content_html,\n    generated_at:   row.generated_at\n  }\n};"
+      }
+    },
+    {
+      "id": "uc-node-07",
+      "name": "Marca In Progress",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-240, 280],
+      "alwaysOutputData": true,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE cobol_analysis.content_generation_status\nSET status = 'in_progress', n8n_execution_id = '{{ $execution.id }}', updated_at = NOW()\nWHERE content_type = 'use_cases'\n  AND scope        = 'system'\n  AND resource_key = 'system_use_cases'",
+        "options": {}
+      }
+    },
+    {
+      "id": "uc-node-08",
+      "name": "Carga Mapa del Sistema",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [0, 280],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Programas con su metadata y métricas\nSELECT\n  'program'                          AS tipo,\n  p.program_name                     AS nombre,\n  p.metadata->>'description'         AS descripcion,\n  p.metadata->>'complexity_score'    AS complejidad,\n  (p.metadata->>'file_references')   AS calls_json,\n  pv.line_count::text                AS lineas\nFROM cobol_analysis.programs p\nJOIN LATERAL (\n  SELECT line_count\n  FROM   cobol_analysis.program_versions\n  WHERE  program_id = p.id\n  ORDER  BY version_number DESC\n  LIMIT  1\n) pv ON true\nWHERE p.program_type = 'CBL'\n\nUNION ALL\n\n-- Archivos físicos únicos por programa\nSELECT\n  'file',\n  fa.physical_name,\n  string_agg(DISTINCT p.program_name, ', '),\n  fa.organization,\n  fa.access_mode,\n  COUNT(DISTINCT p.id)::text\nFROM cobol_analysis.file_accesses fa\nJOIN cobol_analysis.program_versions pv ON pv.id = fa.version_id\nJOIN cobol_analysis.programs p ON p.id = pv.program_id\nGROUP BY fa.physical_name, fa.organization, fa.access_mode\n\nUNION ALL\n\n-- Tablas DB2 únicas\nSELECT\n  'db2',\n  COALESCE(da.schema_name,'') || '.' || da.table_name,\n  string_agg(DISTINCT p.program_name, ', '),\n  array_to_string(da.operations, ','),\n  '',\n  COUNT(DISTINCT p.id)::text\nFROM cobol_analysis.db2_accesses da\nJOIN cobol_analysis.program_versions pv ON pv.id = da.version_id\nJOIN cobol_analysis.programs p ON p.id = pv.program_id\nGROUP BY da.schema_name, da.table_name, da.operations",
+        "options": {}
+      }
+    },
+    {
+      "id": "uc-node-09",
+      "name": "Construye Contexto Sistema",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 280],
+      "parameters": {
+        "jsCode": "const items = $input.all().map(i => i.json);\n\nconst programs = items.filter(i => i.tipo === 'program');\nconst files    = items.filter(i => i.tipo === 'file');\nconst db2      = items.filter(i => i.tipo === 'db2');\n\n// Construye resumen de programas para el LLM\nconst programsSummary = programs.map(p => {\n  let calls = '';\n  try {\n    const refs = JSON.parse(p.calls_json || '[]');\n    if (refs.length) calls = ` | Llama a: ${refs.join(', ')}`;\n  } catch(e) {}\n  return `- ${p.nombre} (${p.lineas || '?'} líneas, complejidad ${p.complejidad || '?'}): ${p.descripcion || 'sin descripción'}${calls}`;\n}).join('\\n');\n\nconst filesSummary = files.length\n  ? files.map(f => `- ${f.nombre}: usado por [${f.descripcion}]`).join('\\n')\n  : 'No se detectaron archivos físicos';\n\nconst db2Summary = db2.length\n  ? db2.map(d => `- ${d.nombre} (${d.descripcion || 'operaciones desconocidas'}): accedido por [${d.calls_json}]`).join('\\n')\n  : 'No se detectaron accesos DB2';\n\nconst context = `PROGRAMAS DEL SISTEMA (${programs.length} programas COBOL):\n${programsSummary}\n\nARCHIVOS DEL SISTEMA:\n${filesSummary}\n\nTABLAS DB2:\n${db2Summary}`;\n\nreturn { json: { context, program_count: programs.length } };"
+      }
+    },
+    {
+      "id": "uc-node-10",
+      "name": "Gemini Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [480, 480],
+      "parameters": {
+        "modelName": "models/gemini-2.0-flash",
+        "options": {}
+      }
+    },
+    {
+      "id": "uc-node-11",
+      "name": "LLM Genera Use Cases",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [480, 280],
+      "parameters": {
+        "promptType": "define",
+        "text": "=Sos un analista funcional experto en sistemas COBOL mainframe.\nTu tarea es analizar el inventario de programas de un sistema COBOL y derivar los CASOS DE USO DE NEGOCIO que el sistema soporta.\n\nEl sistema tiene {{ $json.program_count }} programas COBOL. Analizá el siguiente mapa del sistema:\n\n{{ $json.context }}\n\nDeberás:\n1. Identificar grupos funcionales (módulos de negocio) basándote en los nombres de programas, sus descripciones y relaciones\n2. Para cada grupo, identificar todos los casos de uso que soporta\n3. Para cada caso de uso, inferir actores, flujos y dependencias técnicas\n\nGenerá SOLO un JSON válido (sin markdown, sin texto extra) con esta estructura exacta:\n{\n  \"system_name\": \"<nombre inferido del sistema>\",\n  \"system_description\": \"<descripción general del sistema en 2-3 oraciones>\",\n  \"total_use_cases\": <número total de UCs>,\n  \"groups\": [\n    {\n      \"id\": \"GRP-01\",\n      \"name\": \"<nombre del grupo funcional>\",\n      \"description\": \"<descripción del módulo en 1-2 oraciones>\",\n      \"programs\": [\"<PROG1>\", \"<PROG2>\"],\n      \"use_cases\": [\n        {\n          \"id\": \"UC-001\",\n          \"title\": \"<título del caso de uso>\",\n          \"actor\": \"<actor principal: quién o qué inicia este UC>\",\n          \"trigger\": \"<qué evento o condición dispara este UC>\",\n          \"preconditions\": [\"<precondición 1>\", \"<precondición 2>\"],\n          \"main_flow\": [\n            \"1. <paso 1>\",\n            \"2. <paso 2>\",\n            \"3. <paso 3>\"\n          ],\n          \"alternative_flows\": [\n            {\n              \"id\": \"A1\",\n              \"condition\": \"<condición que dispara el flujo alternativo>\",\n              \"steps\": [\"<paso alternativo>\"]\n            }\n          ],\n          \"postconditions\": [\"<resultado esperado al finalizar>\"],\n          \"programs_involved\": [\"<PROG1>\"],\n          \"files\": [\"<archivo físico si aplica>\"],\n          \"db2_tables\": [\"<tabla DB2 si aplica>\"],\n          \"notes\": \"<observaciones técnicas relevantes o vacío>\"\n        }\n      ]\n    }\n  ]\n}",
+        "batching": {}
+      }
+    },
+    {
+      "id": "uc-node-12",
+      "name": "Parsea y Genera Docs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 280],
+      "parameters": {
+        "jsCode": "const chainOut = $input.first().json;\n\nlet raw = (chainOut.text || chainOut.output || '').trim();\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/```\\s*$/i, '').trim();\n\nlet uc;\ntry {\n  uc = JSON.parse(raw);\n} catch(e) {\n  throw new Error(`LLM no devolvió JSON válido: ${e.message}. Inicio: ${raw.substring(0, 300)}`);\n}\n\n// --- Genera Markdown ---\nconst lines = [];\nlines.push(`# ${uc.system_name || 'Sistema'} — Casos de Uso`);\nlines.push('');\nlines.push(uc.system_description || '');\nlines.push('');\nlines.push(`**Total de casos de uso:** ${uc.total_use_cases}`);\nlines.push('');\n\nfor (const group of (uc.groups || [])) {\n  lines.push(`---`);\n  lines.push(`## ${group.id}: ${group.name}`);\n  lines.push('');\n  lines.push(group.description || '');\n  lines.push('');\n  if (group.programs?.length) {\n    lines.push(`**Programas:** ${group.programs.join(', ')}`);\n    lines.push('');\n  }\n  for (const u of (group.use_cases || [])) {\n    lines.push(`### ${u.id}: ${u.title}`);\n    lines.push('');\n    lines.push(`| Campo | Detalle |`);\n    lines.push(`|-------|---------|`);\n    lines.push(`| **Actor** | ${u.actor} |`);\n    lines.push(`| **Trigger** | ${u.trigger} |`);\n    if (u.programs_involved?.length) lines.push(`| **Programas** | ${u.programs_involved.join(', ')} |`);\n    if (u.db2_tables?.length)        lines.push(`| **Tablas DB2** | ${u.db2_tables.join(', ')} |`);\n    if (u.files?.length)             lines.push(`| **Archivos** | ${u.files.join(', ')} |`);\n    lines.push('');\n    if (u.preconditions?.length) {\n      lines.push(`**Precondiciones:**`);\n      u.preconditions.forEach(p => lines.push(`- ${p}`));\n      lines.push('');\n    }\n    lines.push(`**Flujo principal:**`);\n    (u.main_flow || []).forEach(s => lines.push(s));\n    lines.push('');\n    if (u.alternative_flows?.length) {\n      lines.push(`**Flujos alternativos:**`);\n      u.alternative_flows.forEach(af => {\n        lines.push(`- **${af.id}** — ${af.condition}`);\n        (af.steps || []).forEach(s => lines.push(`  - ${s}`));\n      });\n      lines.push('');\n    }\n    if (u.postconditions?.length) {\n      lines.push(`**Postcondiciones:**`);\n      u.postconditions.forEach(p => lines.push(`- ${p}`));\n      lines.push('');\n    }\n    if (u.notes) {\n      lines.push(`> **Nota técnica:** ${u.notes}`);\n      lines.push('');\n    }\n  }\n}\n\nconst content_md = lines.join('\\n');\n\n// --- Genera HTML ---\nconst escHtml = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');\n\nconst groupsHtml = (uc.groups || []).map(group => {\n  const ucsHtml = (group.use_cases || []).map(u => `\n    <div class=\"uc-card\" id=\"${u.id}\">\n      <div class=\"uc-header\">\n        <span class=\"uc-id\">${u.id}</span>\n        <h3>${escHtml(u.title)}</h3>\n      </div>\n      <div class=\"uc-body\">\n        <div class=\"uc-meta\">\n          <span><strong>Actor:</strong> ${escHtml(u.actor)}</span>\n          <span><strong>Trigger:</strong> ${escHtml(u.trigger)}</span>\n          ${u.programs_involved?.length ? `<span><strong>Programas:</strong> ${u.programs_involved.map(p => `<code>${p}</code>`).join(' ')}</span>` : ''}\n          ${u.db2_tables?.length ? `<span><strong>DB2:</strong> ${u.db2_tables.join(', ')}</span>` : ''}\n          ${u.files?.length ? `<span><strong>Archivos:</strong> ${u.files.join(', ')}</span>` : ''}\n        </div>\n        ${u.preconditions?.length ? `<div class=\"uc-section\"><strong>Precondiciones</strong><ul>${u.preconditions.map(p => `<li>${escHtml(p)}</li>`).join('')}</ul></div>` : ''}\n        <div class=\"uc-section\"><strong>Flujo principal</strong><ol>${(u.main_flow||[]).map(s => `<li>${escHtml(s.replace(/^\\d+\\.\\s*/,''))}</li>`).join('')}</ol></div>\n        ${u.alternative_flows?.length ? `<div class=\"uc-section\"><strong>Flujos alternativos</strong>${u.alternative_flows.map(af => `<div class=\"alt-flow\"><span class=\"alt-id\">${af.id}</span> <em>${escHtml(af.condition)}</em><ul>${(af.steps||[]).map(s=>`<li>${escHtml(s)}</li>`).join('')}</ul></div>`).join('')}</div>` : ''}\n        ${u.postconditions?.length ? `<div class=\"uc-section\"><strong>Postcondiciones</strong><ul>${u.postconditions.map(p => `<li>${escHtml(p)}</li>`).join('')}</ul></div>` : ''}\n        ${u.notes ? `<div class=\"uc-note\">📌 ${escHtml(u.notes)}</div>` : ''}\n      </div>\n    </div>`).join('');\n\n  return `\n  <section class=\"group\" id=\"${group.id}\">\n    <div class=\"group-header\">\n      <h2><span class=\"group-id\">${group.id}</span> ${escHtml(group.name)}</h2>\n      <p>${escHtml(group.description || '')}</p>\n      ${group.programs?.length ? `<div class=\"program-tags\">${group.programs.map(p=>`<code>${p}</code>`).join(' ')}</div>` : ''}\n    </div>\n    ${ucsHtml}\n  </section>`;\n}).join('');\n\nconst tocHtml = (uc.groups || []).map(g =>\n  `<li><a href=\"#${g.id}\">${g.id}: ${escHtml(g.name)}</a>\n    <ul>${(g.use_cases||[]).map(u => `<li><a href=\"#${u.id}\">${u.id}: ${escHtml(u.title)}</a></li>`).join('')}</ul>\n  </li>`\n).join('');\n\nconst content_html = `<!DOCTYPE html>\n<html lang=\"es\">\n<head><meta charset=\"UTF-8\">\n<style>\n  *{box-sizing:border-box;}\n  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;display:flex;min-height:100vh;color:#111;}\n  nav{width:260px;min-width:260px;background:#1e3a5f;color:#fff;padding:24px 16px;position:sticky;top:0;height:100vh;overflow-y:auto;}\n  nav h2{font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:#93c5fd;margin:0 0 12px;}\n  nav ul{list-style:none;padding:0;margin:0;}\n  nav li{margin-bottom:4px;}\n  nav a{color:#bfdbfe;text-decoration:none;font-size:13px;display:block;padding:2px 4px;border-radius:3px;}\n  nav a:hover{background:#2563eb;color:#fff;}\n  nav ul ul{padding-left:12px;margin-top:2px;}\n  nav ul ul a{font-size:12px;color:#93c5fd;}\n  main{flex:1;padding:32px;max-width:900px;}\n  .sys-header{margin-bottom:32px;}\n  .sys-header h1{font-size:24px;color:#1e3a5f;margin:0 0 8px;}\n  .sys-header p{color:#374151;margin:0 0 8px;}\n  .sys-header .badge{display:inline-block;background:#dbeafe;color:#1e40af;padding:4px 12px;border-radius:20px;font-size:13px;}\n  .group{margin-bottom:40px;}\n  .group-header{background:#eff6ff;border-left:4px solid #3b82f6;padding:16px 20px;border-radius:0 8px 8px 0;margin-bottom:16px;}\n  .group-header h2{margin:0 0 4px;font-size:18px;color:#1e3a5f;display:flex;align-items:center;gap:10px;}\n  .group-id{background:#3b82f6;color:#fff;padding:2px 8px;border-radius:4px;font-size:13px;font-weight:600;}\n  .group-header p{margin:4px 0 8px;color:#374151;font-size:14px;}\n  .program-tags code{background:#dbeafe;color:#1e40af;padding:2px 6px;border-radius:3px;font-size:12px;margin-right:4px;}\n  .uc-card{background:#fff;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:14px;box-shadow:0 1px 3px rgba(0,0,0,.06);overflow:hidden;}\n  .uc-header{display:flex;align-items:center;gap:12px;padding:12px 16px;background:#f8fafc;border-bottom:1px solid #e5e7eb;}\n  .uc-id{background:#1e3a5f;color:#fff;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:600;white-space:nowrap;}\n  .uc-header h3{margin:0;font-size:15px;color:#111;}\n  .uc-body{padding:16px;}\n  .uc-meta{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:12px;font-size:13px;color:#374151;}\n  .uc-meta span{background:#f3f4f6;padding:4px 10px;border-radius:4px;}\n  .uc-meta code{background:#dbeafe;color:#1e40af;padding:1px 5px;border-radius:3px;font-size:11px;}\n  .uc-section{margin-bottom:12px;font-size:14px;}\n  .uc-section strong{display:block;color:#374151;margin-bottom:4px;font-size:13px;text-transform:uppercase;letter-spacing:.03em;}\n  .uc-section ol,.uc-section ul{margin:0;padding-left:20px;}\n  .uc-section li{margin-bottom:3px;}\n  .alt-flow{background:#fffbeb;border-left:3px solid #f59e0b;padding:6px 10px;margin-bottom:6px;border-radius:0 4px 4px 0;font-size:13px;}\n  .alt-id{background:#f59e0b;color:#fff;padding:1px 6px;border-radius:3px;font-size:11px;font-weight:600;margin-right:6px;}\n  .uc-note{background:#f0fdf4;border-left:3px solid #22c55e;padding:8px 12px;border-radius:0 4px 4px 0;font-size:13px;color:#166534;margin-top:8px;}\n</style>\n</head>\n<body>\n<nav>\n  <h2>Índice</h2>\n  <ul>${tocHtml}</ul>\n</nav>\n<main>\n  <div class=\"sys-header\">\n    <h1>${escHtml(uc.system_name || 'Sistema')}</h1>\n    <p>${escHtml(uc.system_description || '')}</p>\n    <span class=\"badge\">${uc.total_use_cases} casos de uso</span>\n  </div>\n  ${groupsHtml}\n</main>\n</body></html>`;\n\nreturn {\n  json: {\n    use_cases_json: JSON.stringify(uc),\n    content_md,\n    content_html\n  }\n};"
+      }
+    },
+    {
+      "id": "uc-node-13",
+      "name": "INSERT use_cases",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [960, 280],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO cobol_analysis.use_cases\n  (uc_code, title, generated_at)\nVALUES ('SYSTEM', 'System Use Cases', NOW())\nRETURNING id AS uc_id",
+        "options": {}
+      }
+    },
+    {
+      "id": "uc-node-13b",
+      "name": "UPDATE use_cases_json",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1200, 280],
+      "alwaysOutputData": true,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE cobol_analysis.use_cases\nSET use_cases_json = $1\nWHERE id = {{ $('INSERT use_cases').first().json.uc_id }}",
+        "options": {
+          "queryReplacement": "={{ $('Parsea y Genera Docs').first().json.use_cases_json }}"
+        }
+      }
+    },
+    {
+      "id": "uc-node-13c",
+      "name": "UPDATE content_md",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1440, 280],
+      "alwaysOutputData": true,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE cobol_analysis.use_cases\nSET content_md = $1\nWHERE id = {{ $('INSERT use_cases').first().json.uc_id }}",
+        "options": {
+          "queryReplacement": "={{ $('Parsea y Genera Docs').first().json.content_md }}"
+        }
+      }
+    },
+    {
+      "id": "uc-node-13d",
+      "name": "UPDATE content_html",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1680, 280],
+      "alwaysOutputData": true,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE cobol_analysis.use_cases\nSET content_html = $1\nWHERE id = {{ $('INSERT use_cases').first().json.uc_id }}",
+        "options": {
+          "queryReplacement": "={{ $('Parsea y Genera Docs').first().json.content_html }}"
+        }
+      }
+    },
+    {
+      "id": "uc-node-14",
+      "name": "UPDATE Status Completado",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1920, 280],
+      "alwaysOutputData": true,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE cobol_analysis.content_generation_status\nSET\n  status             = 'completed',\n  generated_at       = NOW(),\n  output_table       = 'use_cases',\n  output_id          = {{ $('INSERT use_cases').first().json.uc_id }},\n  n8n_execution_id   = '{{ $execution.id }}',\n  updated_at         = NOW()\nWHERE content_type = 'use_cases'\n  AND scope        = 'system'\n  AND resource_key = 'system_use_cases'",
+        "options": {}
+      }
+    },
+    {
+      "id": "uc-node-15",
+      "name": "Formatea Respuesta Nueva",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2160, 280],
+      "parameters": {
+        "jsCode": "const data = $('Parsea y Genera Docs').first().json;\nconst uc   = JSON.parse(data.use_cases_json);\nreturn {\n  json: {\n    success:        true,\n    from_cache:     false,\n    total_use_cases:uc.total_use_cases,\n    groups:         uc.groups?.length,\n    use_cases_json: data.use_cases_json,\n    content_md:     data.content_md,\n    content_html:   data.content_html,\n    generated_at:   new Date().toISOString()\n  }\n};"
+      }
+    },
+    {
+      "id": "uc-node-16",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [2400, 80],
+      "parameters": { "options": {} }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Verifica Caché", "type": "main", "index": 0 }]]
+    },
+    "Verifica Caché": {
+      "main": [[{ "node": "Evalúa Caché", "type": "main", "index": 0 }]]
+    },
+    "Evalúa Caché": {
+      "main": [[{ "node": "¿Usar caché?", "type": "main", "index": 0 }]]
+    },
+    "¿Usar caché?": {
+      "main": [
+        [{ "node": "Fetch UC Existente", "type": "main", "index": 0 }],
+        [{ "node": "Marca In Progress",  "type": "main", "index": 0 }]
+      ]
+    },
+    "Fetch UC Existente": {
+      "main": [[{ "node": "Formatea Respuesta Caché", "type": "main", "index": 0 }]]
+    },
+    "Formatea Respuesta Caché": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    },
+    "Marca In Progress": {
+      "main": [[{ "node": "Carga Mapa del Sistema", "type": "main", "index": 0 }]]
+    },
+    "Carga Mapa del Sistema": {
+      "main": [[{ "node": "Construye Contexto Sistema", "type": "main", "index": 0 }]]
+    },
+    "Construye Contexto Sistema": {
+      "main": [[{ "node": "LLM Genera Use Cases", "type": "main", "index": 0 }]]
+    },
+    "Gemini Chat Model": {
+      "ai_languageModel": [[{ "node": "LLM Genera Use Cases", "type": "ai_languageModel", "index": 0 }]]
+    },
+    "LLM Genera Use Cases": {
+      "main": [[{ "node": "Parsea y Genera Docs", "type": "main", "index": 0 }]]
+    },
+    "Parsea y Genera Docs": {
+      "main": [[{ "node": "INSERT use_cases", "type": "main", "index": 0 }]]
+    },
+    "INSERT use_cases": {
+      "main": [[{ "node": "UPDATE use_cases_json", "type": "main", "index": 0 }]]
+    },
+    "UPDATE use_cases_json": {
+      "main": [[{ "node": "UPDATE content_md", "type": "main", "index": 0 }]]
+    },
+    "UPDATE content_md": {
+      "main": [[{ "node": "UPDATE content_html", "type": "main", "index": 0 }]]
+    },
+    "UPDATE content_html": {
+      "main": [[{ "node": "UPDATE Status Completado", "type": "main", "index": 0 }]]
+    },
+    "UPDATE Status Completado": {
+      "main": [[{ "node": "Formatea Respuesta Nueva", "type": "main", "index": 0 }]]
+    },
+    "Formatea Respuesta Nueva": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

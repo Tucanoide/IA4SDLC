@@ -1,0 +1,205 @@
+@import "tailwindcss";
+
+
+@theme {
+  /* ── Fonts ── */
+  --font-inter: "Inter", sans-serif;
+  --font-headline: "Inter", sans-serif;
+  --font-body: "Inter", sans-serif;
+  --font-label: "Inter", sans-serif;
+  --font-mono: "IBM Plex Mono", monospace;
+
+  /* ── The Vault Color Palette (Mainframe Glass) ── */
+  --color-background: #150f28;
+  --color-surface: #150f28;
+  --color-surface-dim: #150f28;
+  --color-surface-bright: #3c3550;
+  --color-surface-container-lowest: #100a23;
+  --color-surface-container-low: #1e1831;
+  --color-surface-container: #221c35;
+  --color-surface-container-high: #2c2640;
+  --color-surface-container-highest: #37314b;
+  --color-surface-variant: #37314b;
+
+  --color-primary: #c3c0ff;
+  --color-primary-container: #5046e4;
+  --color-on-primary: #1e00a5;
+  --color-on-primary-container: #dad7ff;
+
+  --color-secondary: #d1bcff;
+  --color-secondary-container: #513490;
+  --color-on-secondary: #3a1a78;
+  --color-on-secondary-container: #c2a7ff;
+
+  --color-tertiary: #c6c5d4;
+  --color-tertiary-container: #5f5f6c;
+  --color-on-tertiary: #2f2f3b;
+  --color-on-tertiary-container: #dbdae9;
+
+  --color-error: #ffb4ab;
+  --color-error-container: #93000a;
+  --color-on-error: #690005;
+  --color-on-error-container: #ffdad6;
+
+  --color-on-surface: #e8ddff;
+  --color-on-surface-variant: #c7c4d8;
+  --color-on-background: #e8ddff;
+  --color-outline: #918fa1;
+  --color-outline-variant: #464555;
+
+  /* ── Shadows ── */
+  --shadow-glass: inset 0 1px 0 0 rgba(195, 192, 255, 0.05);
+
+  /* ── Animations ── */
+  --animate-blink: blink 1s step-end infinite;
+
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes slideInFromBottom {
+    from { transform: translateY(2rem); opacity: 0; }
+    to   { transform: translateY(0);    opacity: 1; }
+  }
+
+  @keyframes slideInFromTop {
+    from { transform: translateY(-0.5rem); opacity: 0; }
+    to   { transform: translateY(0);       opacity: 1; }
+  }
+}
+
+/* ── Utilities ── */
+@utility glass-card {
+  background: rgba(55, 49, 75, 0.4);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(70, 69, 85, 0.2);
+  box-shadow: inset 0 1px 0 0 rgba(195, 192, 255, 0.05);
+}
+
+@utility glass-nav {
+  background: rgba(21, 15, 40, 0.75);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+@utility custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(195, 192, 255, 0.1) transparent;
+}
+
+@utility animate-in {
+  animation: fadeIn 0.4s ease both;
+}
+
+/* ── Root ── */
+:root {
+  color-scheme: dark;
+}
+
+/* ── Global Body Styles ── */
+body {
+  background-color: #150f28;
+  color: #e8ddff;
+  font-family: 'Inter', sans-serif;
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Animation variant classes ── */
+.fade-in                  { animation: fadeIn 0.4s ease both; }
+.slide-in-from-bottom-8   { animation: slideInFromBottom 0.5s ease both; }
+.slide-in-from-bottom-10  { animation: slideInFromBottom 0.6s ease both; }
+.slide-in-from-top-2      { animation: slideInFromTop 0.25s ease both; }
+
+/* ── Custom Scrollbar ── */
+::-webkit-scrollbar          { width: 6px; height: 6px; }
+::-webkit-scrollbar-track    { background: transparent; }
+::-webkit-scrollbar-thumb    { background: rgba(195, 192, 255, 0.1); border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(195, 192, 255, 0.2); }
+
+/* ── Prose Styles (Markdown / HTML content) ── */
+.prose-cobol h1,
+.prose-cobol h2,
+.prose-cobol h3,
+.prose-cobol h4 {
+  font-family: 'Inter', sans-serif;
+  font-weight: 700;
+  color: #c3c0ff;
+  margin: 2rem 0 1rem;
+}
+.prose-cobol h1 { font-size: 1.5rem; letter-spacing: -0.03em; }
+.prose-cobol h2 { font-size: 1.25rem; border-bottom: 1px solid rgba(195, 192, 255, 0.1); padding-bottom: 0.5rem; }
+.prose-cobol h3 { font-size: 1.05rem; }
+.prose-cobol p  { margin: 0.75rem 0; line-height: 1.75; color: #c7c4d8; }
+.prose-cobol ul,
+.prose-cobol ol { margin: 1rem 0 1rem 1.5rem; }
+.prose-cobol li { margin: 0.5rem 0; color: #c7c4d8; }
+.prose-cobol code {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.85rem;
+  background: rgba(195, 192, 255, 0.1);
+  padding: 0.2rem 0.45rem;
+  border-radius: 0.25rem;
+  color: #c3c0ff;
+}
+.prose-cobol pre {
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(195, 192, 255, 0.1);
+  padding: 1.25rem;
+  border-radius: 0.75rem;
+  overflow-x: auto;
+  margin: 1.5rem 0;
+}
+.prose-cobol pre code {
+  background: none;
+  padding: 0;
+  color: #c7c4d8;
+}
+.prose-cobol table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  margin: 1.5rem 0;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 0.75rem;
+  overflow: hidden;
+}
+.prose-cobol th {
+  background: rgba(255, 255, 255, 0.05);
+  color: #c3c0ff;
+  padding: 0.75rem 1rem;
+  text-align: left;
+  font-weight: 600;
+}
+.prose-cobol td {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  color: #c7c4d8;
+}
+.prose-cobol strong { color: #fff; font-weight: 700; }
+.prose-cobol em     { color: #c7c4d8; }
+.prose-cobol blockquote {
+  border-left: 3px solid rgba(195, 192, 255, 0.3);
+  padding-left: 1rem;
+  color: #918fa1;
+  font-style: italic;
+  margin: 1.5rem 0;
+}
+.prose-cobol a {
+  color: #c3c0ff;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.prose-cobol a:hover { opacity: 0.8; }

@@ -1,0 +1,260 @@
+{
+  "name": "IA4SDLC - Init Content Status",
+  "nodes": [
+    {
+      "id": "ics-node-00",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-1200, -320],
+      "parameters": {
+        "content": "## IA4SDLC - Init Content Status\n\n**Propósito:** Inicializa y mantiene el estado de generación de contenido en `content_generation_status`.\n\n**Modos:**\n- `mode=single + program_name` → un programa (llamado desde Ingesta)\n- `mode=full` (default) → todos los programas (ejecución independiente)\n\n**Ejemplo de llamada:**\n```\nPOST /webhook/ia4sdlc-init-content-status\n{ \"mode\": \"single\", \"program_name\": \"CBACT04C\" }\n{ \"mode\": \"full\" }\n```\n\n**Tipos de contenido creados por programa:**\ntechnical_doc, functional_doc, quality_audit, use_cases, test_cases\n\n**Tipos sistema:**\nsystem_overview, functional_group_doc, use_cases (system_use_cases)",
+        "height": 310,
+        "width": 520,
+        "color": 7
+      }
+    },
+    {
+      "id": "ics-node-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [-1200, 80],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ia4sdlc-init-content-status",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "ics-node-02",
+      "name": "Extrae Parámetros",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-960, 80],
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\nconst mode = (body.mode || 'full').toLowerCase().trim();\nconst program_name = (body.program_name || '').toUpperCase().trim();\n\nif (mode === 'single' && !program_name) {\n  throw new Error('program_name es requerido cuando mode=single');\n}\n\nreturn { json: { mode, program_name } };"
+      }
+    },
+    {
+      "id": "ics-node-03",
+      "name": "¿Modo Single?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [-720, 80],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "cond-mode-single",
+              "leftValue": "={{ $json.mode }}",
+              "rightValue": "single",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ics-note-single",
+      "name": "Sticky Note1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-520, -240],
+      "parameters": {
+        "content": "## Rama: Programa Individual\nLlamada desde el workflow de Ingesta\nal terminar de procesar un programa.",
+        "height": 100,
+        "width": 380,
+        "color": 6
+      }
+    },
+    {
+      "id": "ics-node-04",
+      "name": "Busca Programa",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-480, -120],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  p.id           AS program_id,\n  p.program_name,\n  COALESCE(pv.checksum, '') AS current_checksum\nFROM cobol_analysis.programs p\nLEFT JOIN LATERAL (\n  SELECT checksum\n  FROM   cobol_analysis.program_versions\n  WHERE  program_id = p.id\n  ORDER  BY version_number DESC\n  LIMIT  1\n) pv ON true\nWHERE p.program_name = '{{ $('Extrae Parámetros').first().json.program_name }}'",
+        "options": {}
+      }
+    },
+    {
+      "id": "ics-node-05",
+      "name": "Inserta Pendientes Single",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-240, -120],
+      "alwaysOutputData": true,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO cobol_analysis.content_generation_status\n  (content_type, scope, program_id, program_name, status)\nSELECT\n  ct,\n  'program',\n  {{ $json.program_id }},\n  '{{ $json.program_name }}',\n  'pending'\nFROM unnest(ARRAY[\n  'technical_doc',\n  'functional_doc',\n  'quality_audit',\n  'use_cases',\n  'test_cases'\n]) AS ct\nWHERE NOT EXISTS (\n  SELECT 1\n  FROM cobol_analysis.content_generation_status\n  WHERE program_id   = {{ $json.program_id }}\n    AND content_type = ct\n)",
+        "options": {}
+      }
+    },
+    {
+      "id": "ics-node-06",
+      "name": "Marca Stale Single",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [0, -120],
+      "alwaysOutputData": true,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE cobol_analysis.content_generation_status\nSET\n  status     = 'stale',\n  updated_at = NOW()\nWHERE program_id               = {{ $('Busca Programa').first().json.program_id }}\n  AND scope                    = 'program'\n  AND status                   = 'completed'\n  AND generated_for_checksum IS DISTINCT FROM '{{ $('Busca Programa').first().json.current_checksum }}'",
+        "options": {}
+      }
+    },
+    {
+      "id": "ics-note-full",
+      "name": "Sticky Note2",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-520, 160],
+      "parameters": {
+        "content": "## Rama: Todos los Programas\nEjecución independiente o programada.\nProcesa todos los programas de la BD.",
+        "height": 100,
+        "width": 380,
+        "color": 5
+      }
+    },
+    {
+      "id": "ics-node-07",
+      "name": "Inserta Pendientes Full",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-480, 280],
+      "alwaysOutputData": true,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO cobol_analysis.content_generation_status\n  (content_type, scope, program_id, program_name, status)\nSELECT\n  ct.content_type,\n  'program',\n  p.id,\n  p.program_name,\n  'pending'\nFROM cobol_analysis.programs p\nCROSS JOIN (\n  SELECT unnest(ARRAY[\n    'technical_doc',\n    'functional_doc',\n    'quality_audit',\n    'use_cases',\n    'test_cases'\n  ]) AS content_type\n) ct\nWHERE NOT EXISTS (\n  SELECT 1\n  FROM   cobol_analysis.content_generation_status cgs\n  WHERE  cgs.program_id    = p.id\n    AND  cgs.content_type = ct.content_type\n)",
+        "options": {}
+      }
+    },
+    {
+      "id": "ics-node-08",
+      "name": "Marca Stale Full",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-240, 280],
+      "alwaysOutputData": true,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE cobol_analysis.content_generation_status cgs\nSET\n  status     = 'stale',\n  updated_at = NOW()\nFROM cobol_analysis.programs p\nJOIN LATERAL (\n  SELECT checksum\n  FROM   cobol_analysis.program_versions\n  WHERE  program_id = p.id\n  ORDER  BY version_number DESC\n  LIMIT  1\n) pv ON true\nWHERE cgs.program_id              = p.id\n  AND cgs.scope                   = 'program'\n  AND cgs.status                  = 'completed'\n  AND cgs.generated_for_checksum IS DISTINCT FROM pv.checksum",
+        "options": {}
+      }
+    },
+    {
+      "id": "ics-node-09",
+      "name": "Inserta Sistema",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [240, 80],
+      "alwaysOutputData": true,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO cobol_analysis.content_generation_status\n  (content_type, scope, resource_key, status)\nSELECT\n  v.content_type,\n  'system',\n  v.resource_key,\n  'pending'\nFROM (\n  VALUES\n    ('system_overview'::text,  'system_overview'::text),\n    ('functional_group_doc',   'functional_group_doc'),\n    ('use_cases',              'system_use_cases')\n) AS v(content_type, resource_key)\nWHERE NOT EXISTS (\n  SELECT 1\n  FROM   cobol_analysis.content_generation_status cgs\n  WHERE  cgs.resource_key  = v.resource_key\n    AND  cgs.content_type = v.content_type\n)",
+        "options": {}
+      }
+    },
+    {
+      "id": "ics-node-10",
+      "name": "Marca Stale Sistema",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [480, 80],
+      "alwaysOutputData": true,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE cobol_analysis.content_generation_status cgs\nSET\n  status     = 'stale',\n  updated_at = NOW()\nWHERE cgs.scope  = 'system'\n  AND cgs.status = 'completed'\n  AND EXISTS (\n    SELECT 1\n    FROM   cobol_analysis.programs p\n    WHERE  p.updated_at > cgs.generated_at\n  )",
+        "options": {}
+      }
+    },
+    {
+      "id": "ics-node-11",
+      "name": "Obtiene Resumen",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [720, 80],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  scope,\n  content_type,\n  status,\n  COUNT(*)::int AS count\nFROM cobol_analysis.content_generation_status\nGROUP BY scope, content_type, status\nORDER BY scope, content_type, status",
+        "options": {}
+      }
+    },
+    {
+      "id": "ics-node-12",
+      "name": "Prepara Respuesta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 80],
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nconst summary = {};\nconst totals = { pending: 0, stale: 0, completed: 0, in_progress: 0, failed: 0 };\n\nfor (const item of items) {\n  const { scope, content_type, status, count } = item.json;\n  const key = `${scope}/${content_type}`;\n  if (!summary[key]) summary[key] = {};\n  summary[key][status] = parseInt(count);\n  if (totals[status] !== undefined) totals[status] += parseInt(count);\n}\n\nreturn {\n  json: {\n    success: true,\n    message: 'Content status initialized/updated successfully',\n    totals,\n    detail: summary\n  }\n};"
+      }
+    },
+    {
+      "id": "ics-node-13",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [1200, 80],
+      "parameters": {
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Extrae Parámetros", "type": "main", "index": 0 }]]
+    },
+    "Extrae Parámetros": {
+      "main": [[{ "node": "¿Modo Single?", "type": "main", "index": 0 }]]
+    },
+    "¿Modo Single?": {
+      "main": [
+        [{ "node": "Busca Programa",        "type": "main", "index": 0 }],
+        [{ "node": "Inserta Pendientes Full","type": "main", "index": 0 }]
+      ]
+    },
+    "Busca Programa": {
+      "main": [[{ "node": "Inserta Pendientes Single", "type": "main", "index": 0 }]]
+    },
+    "Inserta Pendientes Single": {
+      "main": [[{ "node": "Marca Stale Single", "type": "main", "index": 0 }]]
+    },
+    "Marca Stale Single": {
+      "main": [[{ "node": "Inserta Sistema", "type": "main", "index": 0 }]]
+    },
+    "Inserta Pendientes Full": {
+      "main": [[{ "node": "Marca Stale Full", "type": "main", "index": 0 }]]
+    },
+    "Marca Stale Full": {
+      "main": [[{ "node": "Inserta Sistema", "type": "main", "index": 0 }]]
+    },
+    "Inserta Sistema": {
+      "main": [[{ "node": "Marca Stale Sistema", "type": "main", "index": 0 }]]
+    },
+    "Marca Stale Sistema": {
+      "main": [[{ "node": "Obtiene Resumen", "type": "main", "index": 0 }]]
+    },
+    "Obtiene Resumen": {
+      "main": [[{ "node": "Prepara Respuesta", "type": "main", "index": 0 }]]
+    },
+    "Prepara Respuesta": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

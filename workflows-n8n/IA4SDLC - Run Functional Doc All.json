@@ -1,0 +1,108 @@
+{
+  "name": "IA4SDLC - Run Functional Doc All",
+  "nodes": [
+    {
+      "id": "rfd-note-00",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-800, -320],
+      "parameters": {
+        "content": "## IA4SDLC - Run Functional Doc All\n\n**Ejecuta Functional Doc para todos los programas CBL.**\nResponde inmediatamente y corre en background.\n\nSi el programa ya tiene doc vigente (caché válido), el\nworkflow de Functional Doc lo devuelve sin regenerar.\n\n```\nPOST /webhook/ia4sdlc-run-functional-doc-all\n{}\n```\n\n⚠️ Ajustá BASE_URL en el nodo 'Config'\nsi n8n no corre en localhost:5678",
+        "height": 260,
+        "width": 380,
+        "color": 5
+      }
+    },
+    {
+      "id": "rfd-node-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [-800, 80],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ia4sdlc-run-functional-doc-all",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "rfd-node-02",
+      "name": "Responde Inmediato",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [-560, -120],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"success\": true, \"message\": \"Pipeline Functional Doc iniciado en background. Puede tardar varios minutos dependiendo de la cantidad de programas.\" }",
+        "options": {}
+      }
+    },
+    {
+      "id": "rfd-node-03",
+      "name": "Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-560, 80],
+      "parameters": {
+        "jsCode": "// ── Ajustá esta URL si n8n corre en otro host/puerto ──\nconst BASE_URL = 'http://localhost:5678/webhook';\n\nreturn { json: { base_url: BASE_URL } };"
+      }
+    },
+    {
+      "id": "rfd-node-04",
+      "name": "Obtiene Programas",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-320, 80],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT program_name\nFROM cobol_analysis.programs\nWHERE program_type = 'CBL'\nORDER BY program_name",
+        "options": {}
+      }
+    },
+    {
+      "id": "rfd-node-05",
+      "name": "HTTP Functional Doc",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-80, 80],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.base_url }}/ia4sdlc-functional-doc",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ program_name: $json.program_name }) }}",
+        "options": { "timeout": 300000 }
+      }
+    },
+    {
+      "id": "rfd-node-06",
+      "name": "Resumen Final",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [160, 80],
+      "parameters": {
+        "jsCode": "const results = $input.all();\nconst total     = results.length;\nconst fromCache = results.filter(r => r.json.from_cache === true).length;\nconst generated = results.filter(r => r.json.from_cache === false).length;\nconst errors    = results.filter(r => !r.json.success).length;\n\nreturn {\n  json: {\n    total_programs: total,\n    from_cache:     fromCache,\n    generated:      generated,\n    errors:         errors,\n    finished_at:    new Date().toISOString()\n  }\n};"
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[
+        { "node": "Responde Inmediato", "type": "main", "index": 0 },
+        { "node": "Config",             "type": "main", "index": 0 }
+      ]]
+    },
+    "Config": {
+      "main": [[{ "node": "Obtiene Programas", "type": "main", "index": 0 }]]
+    },
+    "Obtiene Programas": {
+      "main": [[{ "node": "HTTP Functional Doc", "type": "main", "index": 0 }]]
+    },
+    "HTTP Functional Doc": {
+      "main": [[{ "node": "Resumen Final", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

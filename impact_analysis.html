@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Forensic Architect | Impact Analysis</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;900&amp;family=Space+Grotesk:wght@300;500&amp;family=JetBrains+Mono:wght@400;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-primary": "#00354a",
+                        "surface": "#0b1326",
+                        "on-surface": "#dae2fd",
+                        "on-secondary": "#263143",
+                        "secondary-fixed-dim": "#bcc7de",
+                        "tertiary-container": "#001c18",
+                        "primary-fixed-dim": "#7bd0ff",
+                        "on-primary-container": "#008abb",
+                        "inverse-on-surface": "#283044",
+                        "primary-fixed": "#c4e7ff",
+                        "on-error-container": "#ffdad6",
+                        "background": "#0b1326",
+                        "on-tertiary-fixed": "#00201c",
+                        "surface-variant": "#2d3449",
+                        "on-primary-fixed": "#001e2c",
+                        "outline": "#909097",
+                        "on-tertiary-container": "#009182",
+                        "on-background": "#dae2fd",
+                        "error": "#ffb4ab",
+                        "surface-container-lowest": "#060e20",
+                        "primary": "#7bd0ff",
+                        "surface-container": "#171f33",
+                        "on-tertiary": "#003731",
+                        "inverse-primary": "#00668a",
+                        "on-secondary-container": "#aeb9d0",
+                        "tertiary-fixed-dim": "#3cddc7",
+                        "surface-container-low": "#131b2e",
+                        "inverse-surface": "#dae2fd",
+                        "tertiary-fixed": "#62fae3",
+                        "primary-container": "#001a27",
+                        "on-secondary-fixed": "#111c2d",
+                        "on-primary-fixed-variant": "#004c69",
+                        "surface-container-high": "#222a3d",
+                        "surface-bright": "#31394d",
+                        "on-secondary-fixed-variant": "#3c475a",
+                        "secondary-container": "#3e495d",
+                        "on-tertiary-fixed-variant": "#005047",
+                        "on-error": "#690005",
+                        "error-container": "#93000a",
+                        "on-surface-variant": "#c6c6cd",
+                        "secondary-fixed": "#d8e3fb",
+                        "surface-tint": "#7bd0ff",
+                        "secondary": "#bcc7de",
+                        "outline-variant": "#45464d",
+                        "tertiary": "#3cddc7",
+                        "surface-dim": "#0b1326",
+                        "surface-container-highest": "#2d3449"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "fontFamily": {
+                        "headline": ["Inter", "sans-serif"],
+                        "body": ["Inter", "sans-serif"],
+                        "label": ["Space Grotesk", "sans-serif"],
+                        "mono": ["JetBrains Mono", "monospace"]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+            vertical-align: middle;
+            font-size: 1.25rem;
+        }
+        .glass-panel {
+            background: rgba(45, 52, 73, 0.6);
+            backdrop-filter: blur(20px);
+        }
+        .tech-gradient {
+            background: linear-gradient(135deg, #7bd0ff 0%, #008abb 100%);
+        }
+        .ghost-border {
+            outline: 1px solid rgba(69, 70, 77, 0.15);
+        }
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
+        ::-webkit-scrollbar-track { background: #0b1326; }
+        ::-webkit-scrollbar-thumb { background: #45464d; border-radius: 2px; }
+    </style>
+</head>
+<body class="bg-background text-on-surface font-body overflow-hidden">
+<!-- Top Navigation Bar -->
+<header class="w-full h-14 bg-[#0b1326] flex justify-between items-center px-6 border-b border-[#45464d]/15 z-50">
+<div class="flex items-center gap-8">
+<span class="font-['Inter'] font-black text-[#7bd0ff] tracking-tighter text-lg">Forensic Architect</span>
+<nav class="hidden md:flex items-center gap-1">
+<a class="px-4 py-2 text-[#dae2fd] opacity-70 font-['Inter'] text-sm tracking-tight hover:bg-[#171f33] hover:text-[#7bd0ff] transition-colors" href="#">Scan</a>
+<a class="px-4 py-2 text-[#dae2fd] opacity-70 font-['Inter'] text-sm tracking-tight hover:bg-[#171f33] hover:text-[#7bd0ff] transition-colors" href="#">Decompile</a>
+<a class="px-4 py-2 text-[#7bd0ff] border-b-2 border-[#7bd0ff] font-bold font-['Inter'] text-sm tracking-tight" href="#">Map</a>
+<a class="px-4 py-2 text-[#dae2fd] opacity-70 font-['Inter'] text-sm tracking-tight hover:bg-[#171f33] hover:text-[#7bd0ff] transition-colors" href="#">Trace</a>
+</nav>
+</div>
+<div class="flex items-center gap-4">
+<div class="relative group">
+<input class="bg-surface-container-low border-none text-xs w-48 focus:ring-1 focus:ring-primary py-1.5 px-3 rounded-sm font-label" placeholder="Search objects..." type="text"/>
+</div>
+<button class="bg-primary text-on-primary px-4 py-1.5 rounded-sm font-label text-xs font-bold tech-gradient hover:opacity-90 transition-all">Connect Terminal</button>
+<div class="flex gap-2 text-on-surface-variant">
+<span class="material-symbols-outlined cursor-pointer hover:text-primary transition-colors">settings</span>
+<span class="material-symbols-outlined cursor-pointer hover:text-primary transition-colors">help</span>
+</div>
+</div>
+</header>
+<div class="flex h-[calc(100vh-3.5rem)]">
+<!-- Sidebar Navigation -->
+<aside class="w-64 bg-[#131b2e] flex flex-col py-6 border-r border-[#45464d]/15">
+<div class="px-6 mb-8">
+<div class="flex items-center gap-3 mb-2">
+<div class="w-8 h-8 rounded-sm bg-surface-container-highest flex items-center justify-center">
+<span class="material-symbols-outlined text-primary text-sm">terminal</span>
+</div>
+<div>
+<h3 class="text-[#dae2fd] font-bold text-sm leading-tight">Legacy Audit</h3>
+<p class="text-[10px] text-[#dae2fd] opacity-60 font-mono">COBOL-85 Analyzer</p>
+</div>
+</div>
+<button class="w-full mt-4 py-2 bg-surface-container-highest text-primary font-label text-[10px] tracking-widest uppercase font-bold border border-primary/20 hover:bg-primary/10 transition-colors">
+                    New Analysis
+                </button>
+</div>
+<nav class="flex-1 px-3 space-y-1">
+<a class="flex items-center gap-3 px-3 py-2 text-[#dae2fd] opacity-60 font-mono text-xs hover:bg-[#171f33] hover:text-[#3cddc7] transition-all" href="#">
+<span class="material-symbols-outlined text-[18px]">terminal</span> Workspace
+                </a>
+<a class="flex items-center gap-3 px-3 py-2 text-[#dae2fd] opacity-60 font-mono text-xs hover:bg-[#171f33] hover:text-[#3cddc7] transition-all" href="#">
+<span class="material-symbols-outlined text-[18px]">inventory_2</span> Inventory
+                </a>
+<a class="flex items-center gap-3 px-3 py-2 text-[#7bd0ff] font-bold bg-[#171f33] border-l-4 border-[#7bd0ff] text-xs translate-x-1 transition-all" href="#">
+<span class="material-symbols-outlined text-[18px]">account_tree</span> Flow Chart
+                </a>
+<a class="flex items-center gap-3 px-3 py-2 text-[#dae2fd] opacity-60 font-mono text-xs hover:bg-[#171f33] hover:text-[#3cddc7] transition-all" href="#">
+<span class="material-symbols-outlined text-[18px]">memory</span> Memory Map
+                </a>
+<a class="flex items-center gap-3 px-3 py-2 text-[#dae2fd] opacity-60 font-mono text-xs hover:bg-[#171f33] hover:text-[#3cddc7] transition-all" href="#">
+<span class="material-symbols-outlined text-[18px]">history</span> History
+                </a>
+</nav>
+<div class="px-3 pt-6 border-t border-[#45464d]/10 space-y-1">
+<a class="flex items-center gap-3 px-3 py-2 text-[#dae2fd] opacity-60 font-mono text-xs hover:bg-[#171f33] transition-all" href="#">
+<span class="material-symbols-outlined text-[18px]">settings</span> Settings
+                </a>
+<a class="flex items-center gap-3 px-3 py-2 text-[#dae2fd] opacity-60 font-mono text-xs hover:bg-[#171f33] transition-all" href="#">
+<span class="material-symbols-outlined text-[18px]">logout</span> Log Out
+                </a>
+</div>
+</aside>
+<!-- Main Content Canvas -->
+<main class="flex-1 flex flex-col relative bg-background overflow-hidden">
+<!-- Sticky Control Header -->
+<div class="sticky top-0 z-40 bg-surface-container-low/80 backdrop-blur-md px-6 py-4 flex justify-between items-center ghost-border border-b-0">
+<div class="flex items-center gap-4">
+<div class="flex flex-col">
+<span class="text-[10px] font-label text-outline uppercase tracking-widest">Active Analysis Target</span>
+<h2 class="font-mono text-xl font-bold text-primary tracking-tight">PAYROLL-PROC-A</h2>
+</div>
+<div class="h-8 w-px bg-outline-variant/30 mx-2"></div>
+<div class="flex items-center gap-3 px-3 py-1.5 bg-error-container/20 rounded-sm border border-error/20">
+<span class="w-2 h-2 rounded-full bg-error animate-pulse"></span>
+<span class="text-error font-label text-[10px] font-black tracking-tighter">IMPACT_LEVEL: CRITICAL</span>
+</div>
+</div>
+<div class="flex gap-4">
+<div class="flex flex-col items-end">
+<span class="text-[10px] font-label text-outline uppercase tracking-widest">Topology Scale</span>
+<div class="flex items-center gap-2 mt-1">
+<button class="p-1 hover:bg-surface-container-high rounded-sm"><span class="material-symbols-outlined text-sm">zoom_out</span></button>
+<span class="text-xs font-mono text-on-surface-variant">85%</span>
+<button class="p-1 hover:bg-surface-container-high rounded-sm"><span class="material-symbols-outlined text-sm">zoom_in</span></button>
+</div>
+</div>
+<button class="flex items-center gap-2 px-4 py-2 bg-surface-container-highest border border-outline-variant/30 text-xs font-label uppercase tracking-widest font-bold hover:bg-surface-variant transition-colors">
+<span class="material-symbols-outlined text-sm">file_download</span> Export Map
+                    </button>
+</div>
+</div>
+<!-- Dependency Tree / Impact Graph Area -->
+<div class="flex-1 overflow-auto p-8 relative flex items-center justify-center">
+<!-- Background Grid Texture -->
+<div class="absolute inset-0 opacity-[0.03] pointer-events-none" style="background-image: radial-gradient(#7bd0ff 1px, transparent 0); background-size: 24px 24px;"></div>
+<!-- Graph Visualization Horizontal Container -->
+<div class="flex items-start gap-16 min-w-max relative py-20 px-12">
+<!-- Root Node -->
+<div class="flex-shrink-0 relative group">
+<div class="w-64 p-4 bg-surface-container border-t-2 border-primary ghost-border relative z-10">
+<div class="flex justify-between items-start mb-3">
+<span class="bg-primary/10 text-primary text-[10px] px-2 py-0.5 font-mono">ROOT</span>
+<span class="material-symbols-outlined text-sm text-outline cursor-pointer group-hover:text-primary">more_vert</span>
+</div>
+<p class="font-mono text-sm font-bold text-on-surface mb-4">PAYROLL-PROC-A.CBL</p>
+<div class="space-y-1">
+<div class="flex justify-between text-[10px] font-label text-outline-variant">
+<span>LOCC: 14.2k</span>
+<span>CC: 42</span>
+</div>
+<div class="w-full bg-surface-container-lowest h-1">
+<div class="bg-primary h-full w-[85%]"></div>
+</div>
+</div>
+</div>
+<!-- Connection Line -->
+<div class="absolute top-1/2 left-full w-16 h-px bg-primary/30 -z-0"></div>
+</div>
+<!-- Direct Dependencies Column -->
+<div class="flex flex-col gap-8 relative">
+<!-- Connecting spine -->
+<div class="absolute -left-8 top-[48px] bottom-[48px] w-px bg-primary/30"></div>
+<!-- Node 1 -->
+<div class="flex items-center group">
+<div class="w-8 h-px bg-primary/30"></div>
+<div class="w-64 p-3 bg-surface-container-high border-l-2 border-tertiary ghost-border hover:bg-surface-variant transition-colors cursor-pointer">
+<div class="flex justify-between items-center mb-2">
+<span class="text-[9px] text-tertiary font-label tracking-widest font-bold">DIRECT DEPENDENCY</span>
+<span class="material-symbols-outlined text-xs text-tertiary">chevron_right</span>
+</div>
+<p class="font-mono text-xs text-on-surface">CUST-DB-INTERFACE.CBL</p>
+<div class="mt-2 flex items-center gap-2">
+<div class="flex -space-x-1">
+<div class="w-3 h-3 bg-tertiary/40"></div>
+<div class="w-3 h-3 bg-tertiary/20"></div>
+</div>
+<span class="text-[9px] font-mono text-outline-variant">REL_DENS: 0.82</span>
+</div>
+</div>
+<div class="w-8 h-px bg-outline-variant/30"></div>
+</div>
+<!-- Node 2 -->
+<div class="flex items-center group">
+<div class="w-8 h-px bg-primary/30"></div>
+<div class="w-64 p-3 bg-surface-container-high border-l-2 border-primary ghost-border hover:bg-surface-variant transition-colors cursor-pointer">
+<div class="flex justify-between items-center mb-2">
+<span class="text-[9px] text-primary font-label tracking-widest font-bold">DIRECT DEPENDENCY</span>
+<span class="material-symbols-outlined text-xs text-primary">expand_more</span>
+</div>
+<p class="font-mono text-xs text-on-surface">JCL-BILLING-WEEKLY</p>
+<div class="mt-2 flex items-center gap-1">
+<div class="w-full h-1 bg-surface-container-lowest overflow-hidden">
+<div class="bg-primary/60 h-full w-2/3"></div>
+</div>
+</div>
+</div>
+<div class="w-8 h-px bg-primary/50"></div>
+</div>
+<!-- Node 3 -->
+<div class="flex items-center group">
+<div class="w-8 h-px bg-primary/30"></div>
+<div class="w-64 p-3 bg-surface-container-high border-l-2 border-outline-variant/50 ghost-border hover:bg-surface-variant transition-colors cursor-pointer">
+<div class="flex justify-between items-center mb-2">
+<span class="text-[9px] text-outline font-label tracking-widest font-bold">DIRECT DEPENDENCY</span>
+<span class="material-symbols-outlined text-xs text-outline">chevron_right</span>
+</div>
+<p class="font-mono text-xs text-on-surface">CPY-ACCT-FIELDS</p>
+</div>
+</div>
+</div>
+<!-- Indirect Links Column -->
+<div class="flex flex-col gap-6 pt-24 relative">
+<!-- Connection to JCL-BILLING-WEEKLY -->
+<div class="absolute -left-8 top-[114px] w-px h-[200px] bg-primary/30"></div>
+<!-- Node A -->
+<div class="flex items-center">
+<div class="w-8 h-px bg-primary/30"></div>
+<div class="w-60 p-3 bg-surface-container-lowest ghost-border border-l-2 border-dashed border-primary/40 opacity-80">
+<div class="flex justify-between items-center mb-2">
+<span class="text-[9px] text-outline-variant font-label tracking-widest uppercase">Indirect Link</span>
+<span class="material-symbols-outlined text-xs text-outline-variant">link</span>
+</div>
+<p class="font-mono text-xs text-on-surface-variant">VAT-CALC-MODULE.CBL</p>
+</div>
+</div>
+<!-- Node B -->
+<div class="flex items-center">
+<div class="w-8 h-px bg-primary/30"></div>
+<div class="w-60 p-3 bg-surface-container-lowest ghost-border border-l-2 border-dashed border-primary/40 opacity-80">
+<div class="flex justify-between items-center mb-2">
+<span class="text-[9px] text-outline-variant font-label tracking-widest uppercase">Indirect Link</span>
+<span class="material-symbols-outlined text-xs text-outline-variant">link</span>
+</div>
+<p class="font-mono text-xs text-on-surface-variant">AUDIT-LOG-SYNC.PRC</p>
+</div>
+</div>
+</div>
+<!-- Heatmap Module Asymmetric Placement -->
+<div class="absolute bottom-12 right-12 w-48 p-4 glass-panel ghost-border">
+<h4 class="text-[10px] font-label text-outline uppercase tracking-[0.2em] mb-3">Logic Heatmap</h4>
+<div class="grid grid-cols-6 gap-1">
+<!-- Loop to generate generic heatmap blocks -->
+<div class="w-5 h-5 bg-tertiary"></div>
+<div class="w-5 h-5 bg-tertiary-fixed-dim"></div>
+<div class="w-5 h-5 bg-surface-container-highest"></div>
+<div class="w-5 h-5 bg-tertiary"></div>
+<div class="w-5 h-5 bg-error/40"></div>
+<div class="w-5 h-5 bg-tertiary"></div>
+<div class="w-5 h-5 bg-surface-container-highest"></div>
+<div class="w-5 h-5 bg-surface-container-highest"></div>
+<div class="w-5 h-5 bg-tertiary"></div>
+<div class="w-5 h-5 bg-error"></div>
+<div class="w-5 h-5 bg-tertiary"></div>
+<div class="w-5 h-5 bg-tertiary"></div>
+<div class="w-5 h-5 bg-tertiary"></div>
+<div class="w-5 h-5 bg-surface-container-highest"></div>
+<div class="w-5 h-5 bg-tertiary"></div>
+<div class="w-5 h-5 bg-tertiary"></div>
+<div class="w-5 h-5 bg-surface-container-highest"></div>
+<div class="w-5 h-5 bg-tertiary"></div>
+</div>
+<p class="mt-3 text-[9px] font-mono text-outline-variant leading-tight">Complexity density peaks at line 1,240 (Data I/O Switch).</p>
+</div>
+</div>
+</div>
+<!-- Summary Footer Stats -->
+<footer class="h-16 bg-surface-container-low px-8 border-t border-outline-variant/20 flex items-center justify-between">
+<div class="flex gap-12">
+<div class="flex items-baseline gap-2">
+<span class="text-[10px] font-label text-outline uppercase tracking-widest">Impact Radius</span>
+<span class="font-mono text-lg font-bold text-error">42.8%</span>
+<span class="material-symbols-outlined text-xs text-error">arrow_upward</span>
+</div>
+<div class="flex items-baseline gap-2">
+<span class="text-[10px] font-label text-outline uppercase tracking-widest">Relational Density</span>
+<span class="font-mono text-lg font-bold text-tertiary">0.68</span>
+<span class="text-[10px] font-mono text-outline-variant">Avg/Node</span>
+</div>
+<div class="flex items-baseline gap-2">
+<span class="text-[10px] font-label text-outline uppercase tracking-widest">Refactor Difficulty</span>
+<span class="font-mono text-lg font-bold text-primary">09/10</span>
+<span class="bg-primary/10 text-primary text-[8px] px-1 font-bold">EXTREME</span>
+</div>
+</div>
+<div class="flex items-center gap-6">
+<div class="text-right">
+<span class="block text-[9px] font-label text-outline uppercase">Analysis Integrity</span>
+<span class="text-[10px] font-mono text-tertiary">Verified COBOL-85 Standard Compliance</span>
+</div>
+<div class="h-8 w-px bg-outline-variant/30"></div>
+<div class="flex gap-2">
+<span class="w-2 h-2 rounded-full bg-tertiary"></span>
+<span class="w-2 h-2 rounded-full bg-secondary-container"></span>
+<span class="w-2 h-2 rounded-full bg-primary animate-pulse"></span>
+</div>
+</div>
+</footer>
+<!-- Floating Tooltip Preview -->
+<div class="absolute top-1/4 left-1/3 w-72 glass-panel p-4 ghost-border shadow-2xl pointer-events-none transform translate-x-8 -translate-y-8">
+<div class="flex justify-between items-start mb-2">
+<span class="text-[10px] font-label text-primary font-bold">OBJECT_INSIGHT</span>
+<span class="text-[10px] font-mono text-outline">v2.4.0</span>
+</div>
+<p class="font-mono text-sm text-on-surface mb-3 underline decoration-primary/30">JCL-BILLING-WEEKLY</p>
+<div class="bg-surface-container-lowest p-2 font-mono text-[10px] text-outline-variant border border-outline-variant/10">
+<div class="flex justify-between border-b border-outline-variant/5 pb-1 mb-1">
+<span>CALLS_IN:</span>
+<span class="text-on-surface">12</span>
+</div>
+<div class="flex justify-between border-b border-outline-variant/5 pb-1 mb-1">
+<span>CALLS_OUT:</span>
+<span class="text-on-surface">04</span>
+</div>
+<div class="flex justify-between">
+<span>LAST_MOD:</span>
+<span class="text-on-surface">1998-04-12</span>
+</div>
+</div>
+</div>
+</main>
+</div>
+</body></html>

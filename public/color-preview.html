@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Center Circle — Color Options</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #150f28;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      color: #e8ddff;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 48px;
+      padding: 48px 24px;
+    }
+    h1 {
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: 0.3em;
+      text-transform: uppercase;
+      color: #c3c0ff;
+      opacity: 0.6;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 40px;
+    }
+    .option {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+    }
+    .circle-wrap {
+      position: relative;
+      width: 80px;
+      height: 80px;
+    }
+    .circle {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      animation: pulse 2s ease-in-out infinite;
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .glow {
+      position: absolute;
+      inset: -8px;
+      border-radius: 50%;
+      opacity: 0.25;
+      filter: blur(12px);
+      animation: pulse 2s ease-in-out infinite;
+    }
+    .label {
+      font-size: 10px;
+      font-weight: 900;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: #c7c4d8;
+      text-align: center;
+      opacity: 0.7;
+    }
+    .sublabel {
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #918fa1;
+      text-align: center;
+      opacity: 0.5;
+      margin-top: -10px;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.7; }
+    }
+
+    /* ── Option A: Primary puro (lavanda → índigo) ── */
+    .a .circle { background: linear-gradient(135deg, #c3c0ff, #5046e4); }
+    .a .glow   { background: linear-gradient(135deg, #c3c0ff, #5046e4); }
+
+    /* ── Option B: Primary → Secondary (lavanda → violeta) ── */
+    .b .circle { background: linear-gradient(135deg, #c3c0ff, #d1bcff, #513490); }
+    .b .glow   { background: linear-gradient(135deg, #c3c0ff, #513490); }
+
+    /* ── Option C: Índigo profundo ── */
+    .c .circle { background: linear-gradient(135deg, #5046e4, #1e00a5); }
+    .c .glow   { background: linear-gradient(135deg, #5046e4, #1e00a5); }
+
+    /* ── Option D: Violeta → Rosa (Secondary → Error) ── */
+    .d .circle { background: linear-gradient(135deg, #d1bcff, #513490, #ffb4ab); }
+    .d .glow   { background: linear-gradient(135deg, #d1bcff, #ffb4ab); }
+
+    /* ── Option E: Surface → Primary ── */
+    .e .circle { background: linear-gradient(135deg, #3c3550, #5046e4, #c3c0ff); }
+    .e .glow   { background: linear-gradient(135deg, #3c3550, #c3c0ff); }
+
+    /* ── Option F: Original (referencia) ── */
+    .f .circle { background: linear-gradient(135deg, #a855f7, #3b82f6, #14b8a6); }
+    .f .glow   { background: linear-gradient(135deg, #a855f7, #14b8a6); }
+
+    .current-tag {
+      font-size: 8px;
+      font-weight: 900;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: #ffb4ab;
+      opacity: 0.8;
+    }
+  </style>
+</head>
+<body>
+  <h1>Center Circle — Opciones de color</h1>
+
+  <div class="grid">
+
+    <div class="option a">
+      <div class="circle-wrap">
+        <div class="glow a"></div>
+        <div class="circle"></div>
+      </div>
+      <div class="label">A — Primary</div>
+      <div class="sublabel">#c3c0ff → #5046e4</div>
+    </div>
+
+    <div class="option b">
+      <div class="circle-wrap">
+        <div class="glow b"></div>
+        <div class="circle"></div>
+      </div>
+      <div class="label">B — Primary + Secondary</div>
+      <div class="sublabel">#c3c0ff → #d1bcff → #513490</div>
+    </div>
+
+    <div class="option c">
+      <div class="circle-wrap">
+        <div class="glow c"></div>
+        <div class="circle"></div>
+      </div>
+      <div class="label">C — Índigo profundo</div>
+      <div class="sublabel">#5046e4 → #1e00a5</div>
+    </div>
+
+    <div class="option d">
+      <div class="circle-wrap">
+        <div class="glow d"></div>
+        <div class="circle"></div>
+      </div>
+      <div class="label">D — Secondary → Error</div>
+      <div class="sublabel">#d1bcff → #513490 → #ffb4ab</div>
+    </div>
+
+    <div class="option e">
+      <div class="circle-wrap">
+        <div class="glow e"></div>
+        <div class="circle"></div>
+      </div>
+      <div class="label">E — Surface → Primary</div>
+      <div class="sublabel">#3c3550 → #5046e4 → #c3c0ff</div>
+    </div>
+
+    <div class="option f">
+      <div class="circle-wrap">
+        <div class="glow f"></div>
+        <div class="circle"></div>
+      </div>
+      <div class="label">F — Original</div>
+      <div class="current-tag">↑ actual</div>
+    </div>
+
+  </div>
+</body>
+</html>

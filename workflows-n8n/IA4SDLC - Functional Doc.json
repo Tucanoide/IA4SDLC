@@ -1,0 +1,261 @@
+{
+  "name": "IA4SDLC - Functional Doc",
+  "nodes": [
+    {
+      "id": "fd-note-00",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-1200, -320],
+      "parameters": {
+        "content": "## IA4SDLC - Functional Doc\n\n**Propósito:** Genera documentación funcional de un programa COBOL desde la perspectiva del negocio.\n\n**Fuentes de datos:**\n- PostgreSQL: código fuente, divisiones, calls, copybooks, file_accesses, db2_accesses\n- LLM: genera narrativa funcional orientada al negocio\n\n**Llamada:**\n```\nPOST /webhook/ia4sdlc-functional-doc\n{ \"program_name\": \"CBACT04C\" }\n```\n\n**Output:** Markdown + HTML guardados en functional_docs (scope=program)",
+        "height": 260,
+        "width": 440,
+        "color": 5
+      }
+    },
+    {
+      "id": "fd-node-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [-1200, 80],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ia4sdlc-functional-doc",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "fd-node-02",
+      "name": "Extrae Params",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-960, 80],
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\nconst program_name = (body.program_name || '').toUpperCase().trim();\nif (!program_name) throw new Error('program_name es requerido');\nreturn { json: { program_name } };"
+      }
+    },
+    {
+      "id": "fd-node-03",
+      "name": "Busca Datos Programa",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-720, 80],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  p.id                       AS program_id,\n  p.program_name,\n  p.original_code,\n  p.metadata,\n  pv.id                      AS version_id,\n  pv.line_count,\n  pv.clean_line_count,\n  COALESCE(pv.checksum,'')   AS current_checksum,\n  cgs.status                 AS doc_status,\n  cgs.generated_for_checksum AS cached_checksum,\n  cgs.output_id              AS existing_doc_id\nFROM cobol_analysis.programs p\nJOIN LATERAL (\n  SELECT id, checksum, line_count, clean_line_count\n  FROM   cobol_analysis.program_versions\n  WHERE  program_id = p.id\n  ORDER  BY version_number DESC\n  LIMIT  1\n) pv ON true\nLEFT JOIN cobol_analysis.content_generation_status cgs\n  ON  cgs.program_id   = p.id\n  AND cgs.content_type = 'functional_doc'\nWHERE p.program_name = '{{ $('Extrae Params').first().json.program_name }}'",
+        "options": {}
+      }
+    },
+    {
+      "id": "fd-node-04",
+      "name": "Busca Relaciones",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-480, 80],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Calls salientes\nSELECT 'call' AS tipo, called_program_name AS nombre, call_type AS detalle, line_number::text AS extra\nFROM cobol_analysis.program_calls pc\nJOIN cobol_analysis.program_versions pv ON pv.id = pc.caller_version_id\nWHERE pv.program_id = {{ $json.program_id }}\n\nUNION ALL\n\n-- Copybooks\nSELECT 'copybook', copybook_name, division, line_number::text\nFROM cobol_analysis.copybook_inclusions ci\nJOIN cobol_analysis.program_versions pv ON pv.id = ci.version_id\nWHERE pv.program_id = {{ $json.program_id }}\n\nUNION ALL\n\n-- Archivos físicos\nSELECT 'file', logical_name, physical_name, file_type\nFROM cobol_analysis.file_accesses fa\nJOIN cobol_analysis.program_versions pv ON pv.id = fa.version_id\nWHERE pv.program_id = {{ $json.program_id }}\n\nUNION ALL\n\n-- Tablas DB2\nSELECT 'db2', table_name, COALESCE(schema_name,''), array_to_string(operations,',')\nFROM cobol_analysis.db2_accesses da\nJOIN cobol_analysis.program_versions pv ON pv.id = da.version_id\nWHERE pv.program_id = {{ $json.program_id }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "fd-node-05",
+      "name": "Evalúa Caché y Prepara Contexto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-240, 80],
+      "parameters": {
+        "jsCode": "const prog      = $('Busca Datos Programa').first().json;\nconst relations = $('Busca Relaciones').all().map(i => i.json);\n\nif (!prog.program_id) {\n  throw new Error(`Programa '${$('Extrae Params').first().json.program_name}' no encontrado`);\n}\n\nconst use_cache = (\n  prog.doc_status === 'completed' &&\n  prog.cached_checksum === prog.current_checksum &&\n  prog.existing_doc_id != null\n);\n\nconst calls     = relations.filter(r => r.tipo === 'call');\nconst copybooks = relations.filter(r => r.tipo === 'copybook');\nconst files     = relations.filter(r => r.tipo === 'file');\nconst db2       = relations.filter(r => r.tipo === 'db2');\n\nconst context = [\n  calls.length     ? `PROGRAMAS QUE INVOCA:\\n${calls.map(c => `- ${c.nombre} (${c.detalle}, línea ${c.extra})`).join('\\n')}` : '',\n  copybooks.length ? `COPYBOOKS INCLUIDOS:\\n${copybooks.map(c => `- ${c.nombre} en ${c.detalle} (línea ${c.extra})`).join('\\n')}` : '',\n  files.length     ? `ARCHIVOS QUE ACCEDE:\\n${files.map(f => `- ${f.nombre} → ${f.detalle} (${f.extra || 'tipo desconocido'})`).join('\\n')}` : '',\n  db2.length       ? `TABLAS DE BASE DE DATOS:\\n${db2.map(d => `- ${d.detalle}.${d.nombre} [${d.extra}]`).join('\\n')}` : ''\n].filter(Boolean).join('\\n\\n');\n\nreturn {\n  json: {\n    ...prog,\n    use_cache,\n    calls, copybooks, files, db2,\n    relations_context: context,\n    doc_title: `Documentación Funcional — ${prog.program_name}`\n  }\n};"
+      }
+    },
+    {
+      "id": "fd-node-06",
+      "name": "¿Usar caché?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [0, 80],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "loose", "version": 3 },
+          "conditions": [
+            {
+              "id": "cond-cache",
+              "leftValue": "={{ $json.use_cache }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "fd-node-07",
+      "name": "Fetch Doc Existente",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [240, -160],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, title, content_md, content_html, generated_at\nFROM cobol_analysis.functional_docs\nWHERE id = {{ $('Evalúa Caché y Prepara Contexto').first().json.existing_doc_id }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "fd-node-08",
+      "name": "Formatea Respuesta Caché",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, -160],
+      "parameters": {
+        "jsCode": "const row  = $input.first().json;\nconst prog = $('Evalúa Caché y Prepara Contexto').first().json;\nreturn {\n  json: {\n    success:      true,\n    from_cache:   true,\n    program_name: prog.program_name,\n    title:        row.title,\n    content_md:   row.content_md,\n    content_html: row.content_html,\n    generated_at: row.generated_at\n  }\n};"
+      }
+    },
+    {
+      "id": "fd-node-09",
+      "name": "Marca In Progress",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [240, 280],
+      "alwaysOutputData": true,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE cobol_analysis.content_generation_status\nSET status = 'in_progress', n8n_execution_id = '{{ $execution.id }}', updated_at = NOW()\nWHERE program_id = {{ $('Evalúa Caché y Prepara Contexto').first().json.program_id }}\n  AND content_type = 'functional_doc'",
+        "options": {}
+      }
+    },
+    {
+      "id": "fd-node-10",
+      "name": "Gemini Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [480, 480],
+      "parameters": {
+        "modelName": "models/gemini-2.0-flash",
+        "options": {}
+      }
+    },
+    {
+      "id": "fd-node-11",
+      "name": "LLM Genera Doc Funcional",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [480, 280],
+      "parameters": {
+        "promptType": "define",
+        "text": "=Sos un analista funcional senior especialista en sistemas bancarios y mainframe COBOL.\nTu tarea es generar documentación funcional de un programa COBOL, dirigida a analistas de negocio y product owners — NO a programadores.\nEscribí en español. Usá lenguaje claro, orientado al negocio. Evitá jerga técnica de programación salvo que sea imprescindible (y en ese caso, explicala).\n\n---\nPROGRAMA: {{ $('Evalúa Caché y Prepara Contexto').first().json.program_name }}\nLÍNEAS DE CÓDIGO: {{ $('Evalúa Caché y Prepara Contexto').first().json.clean_line_count || 'N/D' }}\n\n{{ $('Evalúa Caché y Prepara Contexto').first().json.relations_context }}\n\nCÓDIGO FUENTE COMPLETO:\n{{ $('Evalúa Caché y Prepara Contexto').first().json.original_code }}\n---\n\nGenerá un documento funcional en Markdown con EXACTAMENTE estas secciones:\n\n# {{ $('Evalúa Caché y Prepara Contexto').first().json.program_name }} — Documentación Funcional\n\n## 1. Propósito del Negocio\n[Explicá qué necesidad o proceso de negocio resuelve este programa. Quién lo usa, cuándo y por qué. 2-3 párrafos claros.]\n\n## 2. Procesos de Negocio que Implementa\n[Lista los procesos de negocio concretos que realiza: ej. 'Cálculo de intereses', 'Cierre de cuentas', 'Generación de extractos'. Para cada uno, 2-3 líneas explicando qué hace.]\n\n## 3. Reglas de Negocio\n[Lista numerada de las reglas de negocio identificadas en el código. Ejemplos: umbrales, condiciones, validaciones, cálculos, políticas. Cada regla en 1-2 líneas.]\n\n## 4. Flujo del Proceso\n[Descripción del flujo completo en términos funcionales: qué información entra, qué transformaciones o decisiones ocurren, qué resultados produce. Podés usar una lista ordenada de pasos.]\n\n## 5. Entidades de Negocio que Maneja\n[Tabla con las entidades de negocio relevantes (Cuenta, Cliente, Transacción, Tarjeta, etc.) y qué operaciones realiza sobre cada una (consulta, crea, modifica, elimina).]\n\n| Entidad | Operación | Descripción |\n|---------|-----------|-------------|\n\n## 6. Integraciones con Otros Sistemas\n[Qué otros programas, archivos o bases de datos invoca o consume, explicado en términos funcionales (no técnicos). Por ejemplo: 'Consulta el maestro de cuentas', 'Genera archivo para el sistema de reportes'.]\n\n## 7. Restricciones y Validaciones Funcionales\n[Qué condiciones valida el programa antes de procesar. Qué casos rechaza y por qué. Qué errores puede reportar desde el punto de vista del negocio.]\n\n## 8. Casos de Uso Soportados\n[Lista de los casos de uso concretos que este programa habilita. Ejemplo: 'Un operador puede cerrar el día y generar el resumen de movimientos de cuentas activas'.]\n\n## 9. Glosario Funcional\n[Términos de negocio específicos del dominio usados en este programa, con su significado en contexto. Solo los que no sean obvios.]\n\n| Término | Significado |\n|---------|-------------|",
+        "batching": {}
+      }
+    },
+    {
+      "id": "fd-node-12",
+      "name": "Genera HTML y Prepara Datos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 280],
+      "parameters": {
+        "jsCode": "const chainOut = $input.first().json;\nconst prog     = $('Evalúa Caché y Prepara Contexto').first().json;\n\nconst content_md = (chainOut.text || chainOut.output || '').trim();\nconst doc_title  = prog.doc_title;\n\n// Convierte Markdown básico a HTML\nconst mdToHtml = (md) => {\n  return md\n    .replace(/^# (.+)$/gm,   '<h1>$1</h1>')\n    .replace(/^## (.+)$/gm,  '<h2>$1</h2>')\n    .replace(/^### (.+)$/gm, '<h3>$1</h3>')\n    .replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>')\n    .replace(/`(.+?)`/g, '<code>$1</code>')\n    .replace(/^\\| (.+) \\|$/gm, (m) => '<tr>' + m.split('|').filter(c => c.trim()).map(c => `<td>${c.trim()}</td>`).join('') + '</tr>')\n    .replace(/^- (.+)$/gm, '<li>$1</li>')\n    .replace(/^\\d+\\. (.+)$/gm, '<li>$1</li>')\n    .replace(/(<li>.*<\\/li>\\n?)+/g, s => `<ul>${s}</ul>`)\n    .replace(/(<tr>.*<\\/tr>\\n?)+/g, s => `<table>${s}</table>`)\n    .replace(/\\n{2,}/g, '</p><p>')\n    .replace(/^(?!<[h|u|t|l|p])/gm, '');\n};\n\nconst body_html = mdToHtml(content_md);\n\nconst content_html = `<!DOCTYPE html>\n<html lang=\"es\">\n<head><meta charset=\"UTF-8\">\n<style>\n  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:32px;max-width:900px;color:#111;line-height:1.6;}\n  h1{font-size:24px;border-bottom:2px solid #10b981;padding-bottom:8px;color:#064e3b;}\n  h2{font-size:18px;margin-top:32px;color:#047857;border-bottom:1px solid #e5e7eb;padding-bottom:4px;}\n  h3{font-size:15px;color:#374151;margin-top:16px;}\n  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:14px;}\n  td,th{border:1px solid #e5e7eb;padding:8px 12px;text-align:left;}\n  tr:first-child td{background:#f0fdf4;font-weight:600;}\n  tr:nth-child(even) td{background:#f9fafb;}\n  code{background:#f3f4f6;padding:2px 6px;border-radius:4px;font-size:13px;font-family:monospace;}\n  ul,ol{padding-left:20px;}\n  li{margin-bottom:4px;}\n  .meta{background:#f0fdf4;border-left:4px solid #10b981;padding:12px 16px;margin-bottom:24px;border-radius:4px;font-size:13px;color:#374151;}\n</style>\n</head>\n<body>\n<div class=\"meta\">\n  <strong>Programa:</strong> ${prog.program_name} &nbsp;|&nbsp;\n  <strong>Scope:</strong> Programa &nbsp;|&nbsp;\n  <strong>Generado:</strong> ${new Date().toLocaleDateString('es-AR')}\n</div>\n${body_html}\n</body></html>`;\n\nreturn {\n  json: {\n    program_id:       prog.program_id,\n    program_name:     prog.program_name,\n    version_id:       prog.version_id,\n    current_checksum: prog.current_checksum,\n    doc_title,\n    content_md,\n    content_html\n  }\n};"
+      }
+    },
+    {
+      "id": "fd-node-13",
+      "name": "INSERT functional_docs",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [960, 280],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO cobol_analysis.functional_docs\n  (scope, program_id, resource_key, title, content_md, content_html, generated_at)\nVALUES ($1, $2, $3, $4, $5, $6, NOW())\nRETURNING id AS doc_id",
+        "options": {
+          "queryReplacement": "=program, {{ $json.program_id }}, {{ $json.program_name }}, {{ $json.doc_title }}, {{ $json.content_md }}, {{ $json.content_html }}"
+        }
+      }
+    },
+    {
+      "id": "fd-node-14",
+      "name": "UPDATE Status Completado",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1200, 280],
+      "alwaysOutputData": true,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE cobol_analysis.content_generation_status\nSET\n  status                 = 'completed',\n  generated_at           = NOW(),\n  generated_for_checksum = '{{ $('Genera HTML y Prepara Datos').first().json.current_checksum }}',\n  output_table           = 'functional_docs',\n  output_id              = {{ $json.doc_id }},\n  n8n_execution_id       = '{{ $execution.id }}',\n  updated_at             = NOW()\nWHERE program_id   = {{ $('Genera HTML y Prepara Datos').first().json.program_id }}\n  AND content_type = 'functional_doc'",
+        "options": {}
+      }
+    },
+    {
+      "id": "fd-node-15",
+      "name": "Formatea Respuesta Nueva",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 280],
+      "parameters": {
+        "jsCode": "const data = $('Genera HTML y Prepara Datos').first().json;\nreturn {\n  json: {\n    success:      true,\n    from_cache:   false,\n    program_name: data.program_name,\n    title:        data.doc_title,\n    content_md:   data.content_md,\n    content_html: data.content_html,\n    generated_at: new Date().toISOString()\n  }\n};"
+      }
+    },
+    {
+      "id": "fd-node-16",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [1680, 80],
+      "parameters": { "options": {} }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Extrae Params", "type": "main", "index": 0 }]]
+    },
+    "Extrae Params": {
+      "main": [[{ "node": "Busca Datos Programa", "type": "main", "index": 0 }]]
+    },
+    "Busca Datos Programa": {
+      "main": [[{ "node": "Busca Relaciones", "type": "main", "index": 0 }]]
+    },
+    "Busca Relaciones": {
+      "main": [[{ "node": "Evalúa Caché y Prepara Contexto", "type": "main", "index": 0 }]]
+    },
+    "Evalúa Caché y Prepara Contexto": {
+      "main": [[{ "node": "¿Usar caché?", "type": "main", "index": 0 }]]
+    },
+    "¿Usar caché?": {
+      "main": [
+        [{ "node": "Fetch Doc Existente",  "type": "main", "index": 0 }],
+        [{ "node": "Marca In Progress",    "type": "main", "index": 0 }]
+      ]
+    },
+    "Fetch Doc Existente": {
+      "main": [[{ "node": "Formatea Respuesta Caché", "type": "main", "index": 0 }]]
+    },
+    "Formatea Respuesta Caché": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    },
+    "Marca In Progress": {
+      "main": [[{ "node": "LLM Genera Doc Funcional", "type": "main", "index": 0 }]]
+    },
+    "Gemini Chat Model": {
+      "ai_languageModel": [[{ "node": "LLM Genera Doc Funcional", "type": "ai_languageModel", "index": 0 }]]
+    },
+    "LLM Genera Doc Funcional": {
+      "main": [[{ "node": "Genera HTML y Prepara Datos", "type": "main", "index": 0 }]]
+    },
+    "Genera HTML y Prepara Datos": {
+      "main": [[{ "node": "INSERT functional_docs", "type": "main", "index": 0 }]]
+    },
+    "INSERT functional_docs": {
+      "main": [[{ "node": "UPDATE Status Completado", "type": "main", "index": 0 }]]
+    },
+    "UPDATE Status Completado": {
+      "main": [[{ "node": "Formatea Respuesta Nueva", "type": "main", "index": 0 }]]
+    },
+    "Formatea Respuesta Nueva": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

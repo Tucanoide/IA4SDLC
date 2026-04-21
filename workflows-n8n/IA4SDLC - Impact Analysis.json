@@ -1,0 +1,261 @@
+{
+  "name": "IA4SDLC - Impact Analysis",
+  "nodes": [
+    {
+      "id": "ia-note-00",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-1200, -380],
+      "parameters": {
+        "content": "## IA4SDLC - Impact Analysis\n\n**Propósito:** Analiza el impacto de un programa COBOL: quién lo llama, a quién llama, qué archivos y tablas DB2 usa, qué copybooks comparte con otros programas, y evalúa el riesgo de impacto ante un cambio.\n\n**Fuentes de datos:**\n- PostgreSQL: program_calls (bidireccional), copybook_inclusions, file_accesses, db2_accesses\n- LLM: evalúa impacto y asigna nivel de riesgo HIGH / MEDIUM / LOW\n\n**Llamada:**\n```\nPOST /webhook/ia4sdlc-impact-analysis\n{ \"program_name\": \"CBACT04C\" }\n```\n\n**Output:** JSON guardado en cobol_analysis.impact_analysis\n\n**CREATE TABLE (correr una sola vez en PostgreSQL):**\n```sql\nCREATE TABLE IF NOT EXISTS cobol_analysis.impact_analysis (\n  id                       SERIAL PRIMARY KEY,\n  program_id               INTEGER NOT NULL REFERENCES cobol_analysis.programs(id),\n  version_id               INTEGER NOT NULL REFERENCES cobol_analysis.program_versions(id),\n  program_name             TEXT NOT NULL,\n  program_description      TEXT,\n  program_functionality    TEXT,\n  calling_programs         JSONB NOT NULL DEFAULT '[]',\n  called_programs          JSONB NOT NULL DEFAULT '[]',\n  copys                    JSONB NOT NULL DEFAULT '[]',\n  calling_count            INTEGER NOT NULL DEFAULT 0,\n  called_count             INTEGER NOT NULL DEFAULT 0,\n  file_accesses            JSONB NOT NULL DEFAULT '[]',\n  db2_tables               JSONB NOT NULL DEFAULT '[]',\n  impact_risk              TEXT CHECK (impact_risk IN ('HIGH','MEDIUM','LOW')),\n  impact_rationale         TEXT,\n  shared_copybook_programs JSONB NOT NULL DEFAULT '[]',\n  analysis_json            JSONB,\n  generated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),\n  created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()\n);\nCREATE INDEX IF NOT EXISTS idx_impact_analysis_program_id ON cobol_analysis.impact_analysis (program_id);\n```",
+        "height": 560,
+        "width": 620,
+        "color": 3
+      }
+    },
+    {
+      "id": "ia-node-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [-1200, 80],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ia4sdlc-impact-analysis",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "ia-node-02",
+      "name": "Extrae Params",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-960, 80],
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\nconst program_name = (body.program_name || '').toUpperCase().trim();\nif (!program_name) throw new Error('program_name es requerido');\nreturn { json: { program_name } };"
+      }
+    },
+    {
+      "id": "ia-node-03",
+      "name": "Busca Datos Programa",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-720, 80],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  p.id                       AS program_id,\n  p.program_name,\n  p.original_code,\n  p.metadata,\n  pv.id                      AS version_id,\n  pv.line_count,\n  pv.clean_line_count,\n  COALESCE(pv.checksum,'')   AS current_checksum,\n  cgs.status                 AS doc_status,\n  cgs.generated_for_checksum AS cached_checksum,\n  cgs.output_id              AS existing_doc_id\nFROM cobol_analysis.programs p\nJOIN LATERAL (\n  SELECT id, checksum, line_count, clean_line_count\n  FROM   cobol_analysis.program_versions\n  WHERE  program_id = p.id\n  ORDER  BY version_number DESC\n  LIMIT  1\n) pv ON true\nLEFT JOIN cobol_analysis.content_generation_status cgs\n  ON  cgs.program_id   = p.id\n  AND cgs.content_type = 'impact_analysis'\nWHERE p.program_name = '{{ $('Extrae Params').first().json.program_name }}'",
+        "options": {}
+      }
+    },
+    {
+      "id": "ia-node-04",
+      "name": "Busca Relaciones",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-480, 80],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Programas que INVOCAN a este programa (callers / reverse dependency)\nSELECT 'caller' AS tipo, p.program_name AS nombre, pc.call_type AS detalle, pc.line_number::text AS extra\nFROM cobol_analysis.program_calls pc\nJOIN cobol_analysis.program_versions pv ON pv.id = pc.caller_version_id\nJOIN cobol_analysis.programs p ON p.id = pv.program_id\nWHERE UPPER(pc.called_program_name) = '{{ $json.program_name }}'\n\nUNION ALL\n\n-- Programas que INVOCA este programa (callees)\nSELECT 'call' AS tipo, called_program_name AS nombre, call_type AS detalle, line_number::text AS extra\nFROM cobol_analysis.program_calls pc\nJOIN cobol_analysis.program_versions pv ON pv.id = pc.caller_version_id\nWHERE pv.program_id = {{ $json.program_id }}\n\nUNION ALL\n\n-- Copybooks incluidos\nSELECT 'copybook', copybook_name, division, line_number::text\nFROM cobol_analysis.copybook_inclusions ci\nJOIN cobol_analysis.program_versions pv ON pv.id = ci.version_id\nWHERE pv.program_id = {{ $json.program_id }}\n\nUNION ALL\n\n-- Archivos físicos accedidos\nSELECT 'file', logical_name, physical_name, file_type\nFROM cobol_analysis.file_accesses fa\nJOIN cobol_analysis.program_versions pv ON pv.id = fa.version_id\nWHERE pv.program_id = {{ $json.program_id }}\n\nUNION ALL\n\n-- Tablas DB2 accedidas\nSELECT 'db2', table_name, COALESCE(schema_name,''), array_to_string(operations,',')\nFROM cobol_analysis.db2_accesses da\nJOIN cobol_analysis.program_versions pv ON pv.id = da.version_id\nWHERE pv.program_id = {{ $json.program_id }}\n\nUNION ALL\n\n-- Programas que comparten los mismos copybooks (afectados indirectamente)\nSELECT DISTINCT 'shared_copy', ci2.copybook_name, p2.program_name, ''\nFROM cobol_analysis.copybook_inclusions ci1\nJOIN cobol_analysis.program_versions pv1 ON pv1.id = ci1.version_id\nJOIN cobol_analysis.copybook_inclusions ci2 ON ci2.copybook_name = ci1.copybook_name AND ci2.version_id != ci1.version_id\nJOIN cobol_analysis.program_versions pv2 ON pv2.id = ci2.version_id\nJOIN cobol_analysis.programs p2 ON p2.id = pv2.program_id\nWHERE pv1.program_id = {{ $json.program_id }}\n  AND pv2.program_id != {{ $json.program_id }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "ia-node-05",
+      "name": "Evalúa Caché y Prepara Contexto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-240, 80],
+      "parameters": {
+        "jsCode": "const prog      = $('Busca Datos Programa').first().json;\nconst relations = $('Busca Relaciones').all().map(i => i.json);\n\nif (!prog.program_id) {\n  throw new Error(`Programa '${$('Extrae Params').first().json.program_name}' no encontrado`);\n}\n\nconst use_cache = (\n  prog.doc_status === 'completed' &&\n  prog.cached_checksum === prog.current_checksum &&\n  prog.existing_doc_id != null\n);\n\nconst callers   = [...new Map(relations.filter(r => r.tipo === 'caller').map(r => [r.nombre, r])).values()];\nconst calls     = [...new Map(relations.filter(r => r.tipo === 'call').map(r => [r.nombre, r])).values()];\nconst copybooks = [...new Map(relations.filter(r => r.tipo === 'copybook').map(r => [r.nombre, r])).values()];\nconst files     = [...new Map(relations.filter(r => r.tipo === 'file').map(r => [r.nombre, r])).values()];\nconst db2       = [...new Map(relations.filter(r => r.tipo === 'db2').map(r => [r.nombre, r])).values()];\nconst sharedRaw = relations.filter(r => r.tipo === 'shared_copy');\n\nconst sharedByBook = {};\nsharedRaw.forEach(r => {\n  if (!sharedByBook[r.nombre]) sharedByBook[r.nombre] = [];\n  if (!sharedByBook[r.nombre].includes(r.detalle)) sharedByBook[r.nombre].push(r.detalle);\n});\n\nconst context = [\n  callers.length > 0\n    ? `PROGRAMAS QUE INVOCAN A ESTE PROGRAMA (callers):\\n${callers.map(c => `- ${c.nombre} (tipo: ${c.detalle})`).join('\\n')}`\n    : 'PROGRAMAS QUE INVOCAN A ESTE PROGRAMA: ninguno registrado en el sistema',\n  calls.length > 0\n    ? `PROGRAMAS QUE ESTE PROGRAMA INVOCA (callees):\\n${calls.map(c => `- ${c.nombre} (tipo: ${c.detalle}, línea ${c.extra})`).join('\\n')}`\n    : 'PROGRAMAS QUE INVOCA: ninguno',\n  copybooks.length > 0\n    ? `COPYBOOKS INCLUIDOS:\\n${copybooks.map(c => `- ${c.nombre} en división ${c.detalle} (línea ${c.extra})`).join('\\n')}`\n    : 'COPYBOOKS: ninguno',\n  files.length > 0\n    ? `ARCHIVOS QUE ACCEDE:\\n${files.map(f => `- ${f.nombre} → ${f.detalle} (${f.extra || 'tipo desconocido'})`).join('\\n')}`\n    : 'ARCHIVOS: ninguno',\n  db2.length > 0\n    ? `TABLAS DB2:\\n${db2.map(d => `- ${d.detalle ? d.detalle + '.' : ''}${d.nombre} [operaciones: ${d.extra}]`).join('\\n')}`\n    : 'TABLAS DB2: ninguna',\n  Object.keys(sharedByBook).length > 0\n    ? `PROGRAMAS QUE COMPARTEN COPYBOOKS CON ESTE PROGRAMA (impacto indirecto ante cambios en copybooks):\\n${Object.entries(sharedByBook).map(([book, progs]) => `- ${book}: ${progs.join(', ')}`).join('\\n')}`\n    : ''\n].filter(Boolean).join('\\n\\n');\n\nreturn {\n  json: {\n    ...prog,\n    use_cache,\n    relations_context: context\n  }\n};"
+      }
+    },
+    {
+      "id": "ia-node-06",
+      "name": "¿Usar caché?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [0, 80],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "loose", "version": 3 },
+          "conditions": [
+            {
+              "id": "cond-cache",
+              "leftValue": "={{ $json.use_cache }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ia-node-07",
+      "name": "Fetch Analysis Existente",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [240, -160],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, program_name, program_description, program_functionality,\n       calling_programs, called_programs, copys, calling_count, called_count,\n       file_accesses, db2_tables, impact_risk, impact_rationale,\n       shared_copybook_programs, analysis_json, generated_at\nFROM cobol_analysis.impact_analysis\nWHERE id = {{ $('Evalúa Caché y Prepara Contexto').first().json.existing_doc_id }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "ia-node-08",
+      "name": "Formatea Respuesta Caché",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, -160],
+      "parameters": {
+        "jsCode": "const row  = $input.first().json;\nconst prog = $('Evalúa Caché y Prepara Contexto').first().json;\nreturn {\n  json: {\n    success:      true,\n    from_cache:   true,\n    program_name: prog.program_name,\n    analysis:     row.analysis_json,\n    generated_at: row.generated_at\n  }\n};"
+      }
+    },
+    {
+      "id": "ia-node-09",
+      "name": "Marca In Progress",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [240, 280],
+      "alwaysOutputData": true,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE cobol_analysis.content_generation_status\nSET status = 'in_progress', n8n_execution_id = '{{ $execution.id }}', updated_at = NOW()\nWHERE program_id   = {{ $('Evalúa Caché y Prepara Contexto').first().json.program_id }}\n  AND content_type = 'impact_analysis'",
+        "options": {}
+      }
+    },
+    {
+      "id": "ia-node-10",
+      "name": "Gemini Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [480, 480],
+      "parameters": {
+        "modelName": "models/gemini-2.0-flash",
+        "options": {}
+      }
+    },
+    {
+      "id": "ia-node-11",
+      "name": "LLM Genera Análisis de Impacto",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [480, 280],
+      "parameters": {
+        "promptType": "define",
+        "text": "=Actuás como un analista técnico experto en sistemas Mainframe COBOL.\nTu tarea es realizar un análisis de impacto del programa: {{ $json.program_name }}\n\nDATOS ESTRUCTURALES DEL PROGRAMA:\n- Líneas de código (sin comentarios): {{ $json.clean_line_count || 'N/D' }}\n\n{{ $json.relations_context }}\n\nCÓDIGO FUENTE:\n{{ $json.original_code }}\n\nREGLAS ESTRICTAS:\n- Respondé ÚNICAMENTE con el JSON válido, sin texto adicional, sin markdown, sin bloques de código\n- Si no encontrás información para un campo, dejá el array vacío [] o string vacío \"\"\n- program_description: máximo 30 palabras describiendo la funcionalidad del programa\n- program_functionality: 1-2 párrafos describiendo qué hace técnicamente y en qué contexto de negocio opera\n- calling_programs: lista de nombres de programas que invocan a este (tomados de la sección PROGRAMAS QUE INVOCAN)\n- called_programs: lista de nombres de programas que este invoca (tomados de la sección PROGRAMAS QUE INVOCA)\n- copys: lista de nombres de copybooks utilizados\n- calling_count: cantidad numérica de programas que invocan a este programa\n- called_count: cantidad numérica de programas que este programa invoca\n- file_accesses: archivos accedidos con logical_name, physical_name y file_type\n- db2_tables: tablas DB2 con table, schema y operations (array de strings como [\"SELECT\",\"UPDATE\"])\n- impact_risk: asigná \"HIGH\" si el programa tiene múltiples callers o accede a recursos DB2/archivos críticos compartidos con otros programas; \"MEDIUM\" si tiene algunos dependientes o recursos moderadamente compartidos; \"LOW\" si el programa es autónomo o con pocos dependientes\n- impact_rationale: 1-2 oraciones explicando concretamente por qué tiene ese nivel de riesgo de impacto ante un cambio en su código o interfaz\n- shared_copybook_programs: para cada copybook que este programa comparte con otros, listar los otros programas que también lo usan (esa info está en la sección PROGRAMAS QUE COMPARTEN COPYBOOKS)\n\nFORMATO DE SALIDA (JSON estricto, sin ningún texto antes o después):\n{\n  \"program_name\": \"{{ $json.program_name }}\",\n  \"program_description\": \"\",\n  \"program_functionality\": \"\",\n  \"calling_programs\": [],\n  \"called_programs\": [],\n  \"copys\": [],\n  \"calling_count\": 0,\n  \"called_count\": 0,\n  \"file_accesses\": [{\"logical_name\": \"\", \"physical_name\": \"\", \"file_type\": \"\"}],\n  \"db2_tables\": [{\"table\": \"\", \"schema\": \"\", \"operations\": []}],\n  \"impact_risk\": \"\",\n  \"impact_rationale\": \"\",\n  \"shared_copybook_programs\": [{\"copybook\": \"\", \"programs\": []}]\n}",
+        "batching": {}
+      }
+    },
+    {
+      "id": "ia-node-12",
+      "name": "Parsea y Valida JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 280],
+      "parameters": {
+        "jsCode": "const chainOut = $input.first().json;\nconst prog     = $('Evalúa Caché y Prepara Contexto').first().json;\n\nlet rawText = (chainOut.text || chainOut.output || '').trim();\nrawText = rawText.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\n\nlet analysis;\ntry {\n  analysis = JSON.parse(rawText);\n} catch(e) {\n  throw new Error('LLM no retornó JSON válido: ' + rawText.substring(0, 300));\n}\n\nanalysis.program_name             = prog.program_name;\nanalysis.calling_programs         = analysis.calling_programs         || [];\nanalysis.called_programs          = analysis.called_programs          || [];\nanalysis.copys                    = analysis.copys                    || [];\nanalysis.file_accesses            = analysis.file_accesses            || [];\nanalysis.db2_tables               = analysis.db2_tables               || [];\nanalysis.shared_copybook_programs = analysis.shared_copybook_programs || [];\nanalysis.calling_count            = Number(analysis.calling_count)    || analysis.calling_programs.length;\nanalysis.called_count             = Number(analysis.called_count)     || analysis.called_programs.length;\nanalysis.impact_risk              = ['HIGH','MEDIUM','LOW'].includes((analysis.impact_risk || '').toUpperCase())\n                                    ? analysis.impact_risk.toUpperCase() : 'LOW';\nanalysis.impact_rationale         = analysis.impact_rationale         || '';\nanalysis.program_description      = analysis.program_description      || '';\nanalysis.program_functionality    = analysis.program_functionality    || '';\n\nreturn {\n  json: {\n    program_id:                   prog.program_id,\n    program_name:                 prog.program_name,\n    version_id:                   prog.version_id,\n    current_checksum:             prog.current_checksum,\n    analysis,\n    calling_programs_str:         JSON.stringify(analysis.calling_programs),\n    called_programs_str:          JSON.stringify(analysis.called_programs),\n    copys_str:                    JSON.stringify(analysis.copys),\n    file_accesses_str:            JSON.stringify(analysis.file_accesses),\n    db2_tables_str:               JSON.stringify(analysis.db2_tables),\n    shared_copybook_programs_str: JSON.stringify(analysis.shared_copybook_programs),\n    analysis_json_str:            JSON.stringify(analysis)\n  }\n};"
+      }
+    },
+    {
+      "id": "ia-node-13",
+      "name": "INSERT impact_analysis",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [960, 280],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO cobol_analysis.impact_analysis\n  (program_id, version_id, program_name, program_description, program_functionality,\n   calling_programs, called_programs, copys, calling_count, called_count,\n   file_accesses, db2_tables, impact_risk, impact_rationale,\n   shared_copybook_programs, analysis_json, generated_at)\nVALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW())\nRETURNING id AS analysis_id",
+        "options": {
+          "queryReplacement": "={{ $json.program_id }}, {{ $json.version_id }}, {{ $json.program_name }}, {{ $json.analysis.program_description }}, {{ $json.analysis.program_functionality }}, {{ $json.calling_programs_str }}, {{ $json.called_programs_str }}, {{ $json.copys_str }}, {{ $json.analysis.calling_count }}, {{ $json.analysis.called_count }}, {{ $json.file_accesses_str }}, {{ $json.db2_tables_str }}, {{ $json.analysis.impact_risk }}, {{ $json.analysis.impact_rationale }}, {{ $json.shared_copybook_programs_str }}, {{ $json.analysis_json_str }}"
+        }
+      }
+    },
+    {
+      "id": "ia-node-14",
+      "name": "UPDATE Status Completado",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1200, 280],
+      "alwaysOutputData": true,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE cobol_analysis.content_generation_status\nSET\n  status                 = 'completed',\n  generated_at           = NOW(),\n  generated_for_checksum = '{{ $('Parsea y Valida JSON').first().json.current_checksum }}',\n  output_table           = 'impact_analysis',\n  output_id              = {{ $json.analysis_id }},\n  n8n_execution_id       = '{{ $execution.id }}',\n  updated_at             = NOW()\nWHERE program_id   = {{ $('Parsea y Valida JSON').first().json.program_id }}\n  AND content_type = 'impact_analysis'",
+        "options": {}
+      }
+    },
+    {
+      "id": "ia-node-15",
+      "name": "Formatea Respuesta Nueva",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 280],
+      "parameters": {
+        "jsCode": "const data = $('Parsea y Valida JSON').first().json;\nreturn {\n  json: {\n    success:      true,\n    from_cache:   false,\n    program_name: data.program_name,\n    analysis:     data.analysis,\n    generated_at: new Date().toISOString()\n  }\n};"
+      }
+    },
+    {
+      "id": "ia-node-16",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [1680, 80],
+      "parameters": { "options": {} }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Extrae Params", "type": "main", "index": 0 }]]
+    },
+    "Extrae Params": {
+      "main": [[{ "node": "Busca Datos Programa", "type": "main", "index": 0 }]]
+    },
+    "Busca Datos Programa": {
+      "main": [[{ "node": "Busca Relaciones", "type": "main", "index": 0 }]]
+    },
+    "Busca Relaciones": {
+      "main": [[{ "node": "Evalúa Caché y Prepara Contexto", "type": "main", "index": 0 }]]
+    },
+    "Evalúa Caché y Prepara Contexto": {
+      "main": [[{ "node": "¿Usar caché?", "type": "main", "index": 0 }]]
+    },
+    "¿Usar caché?": {
+      "main": [
+        [{ "node": "Fetch Analysis Existente", "type": "main", "index": 0 }],
+        [{ "node": "Marca In Progress",        "type": "main", "index": 0 }]
+      ]
+    },
+    "Fetch Analysis Existente": {
+      "main": [[{ "node": "Formatea Respuesta Caché", "type": "main", "index": 0 }]]
+    },
+    "Formatea Respuesta Caché": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    },
+    "Marca In Progress": {
+      "main": [[{ "node": "LLM Genera Análisis de Impacto", "type": "main", "index": 0 }]]
+    },
+    "Gemini Chat Model": {
+      "ai_languageModel": [[{ "node": "LLM Genera Análisis de Impacto", "type": "ai_languageModel", "index": 0 }]]
+    },
+    "LLM Genera Análisis de Impacto": {
+      "main": [[{ "node": "Parsea y Valida JSON", "type": "main", "index": 0 }]]
+    },
+    "Parsea y Valida JSON": {
+      "main": [[{ "node": "INSERT impact_analysis", "type": "main", "index": 0 }]]
+    },
+    "INSERT impact_analysis": {
+      "main": [[{ "node": "UPDATE Status Completado", "type": "main", "index": 0 }]]
+    },
+    "UPDATE Status Completado": {
+      "main": [[{ "node": "Formatea Respuesta Nueva", "type": "main", "index": 0 }]]
+    },
+    "Formatea Respuesta Nueva": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

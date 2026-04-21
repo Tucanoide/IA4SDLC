@@ -1,0 +1,86 @@
+{
+  "name": "IA4SDLC - Cleanup",
+  "nodes": [
+    {
+      "id": "cl-note-00",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-800, -280],
+      "parameters": {
+        "content": "## IA4SDLC - Cleanup\n\n**Limpia todas las tablas de contenido generado.**\nNO toca las tablas de datos COBOL.\n\n**Tablas limpiadas:**\n- content_generation_status\n- use_cases\n- technical_docs\n- quality_audits\n- onboarding_content\n\n**Requiere confirmación explícita:**\n```\nPOST /webhook/ia4sdlc-cleanup\n{ \"confirm\": true }\n```\n\n⚠️ Después correr Init Content Status\npara reinicializar el tracking.",
+        "height": 280,
+        "width": 340,
+        "color": 3
+      }
+    },
+    {
+      "id": "cl-node-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [-800, 80],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ia4sdlc-cleanup",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "cl-node-02",
+      "name": "Verifica Confirmación",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-560, 80],
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\nif (body.confirm !== true) {\n  throw new Error('Se requiere { \"confirm\": true } en el body para ejecutar la limpieza.');\n}\nreturn { json: { confirmed: true } };"
+      }
+    },
+    {
+      "id": "cl-node-03",
+      "name": "Limpia Tablas",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-320, 80],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH\n  d1 AS (DELETE FROM cobol_analysis.content_generation_status RETURNING 1),\n  d2 AS (DELETE FROM cobol_analysis.use_cases RETURNING 1),\n  d3 AS (DELETE FROM cobol_analysis.technical_docs RETURNING 1),\n  d4 AS (DELETE FROM cobol_analysis.quality_audits RETURNING 1),\n  d5 AS (DELETE FROM cobol_analysis.onboarding_content RETURNING 1)\nSELECT\n  (SELECT COUNT(*)::int FROM d1) AS content_generation_status,\n  (SELECT COUNT(*)::int FROM d2) AS use_cases,\n  (SELECT COUNT(*)::int FROM d3) AS technical_docs,\n  (SELECT COUNT(*)::int FROM d4) AS quality_audits,\n  (SELECT COUNT(*)::int FROM d5) AS onboarding_content",
+        "options": {}
+      }
+    },
+    {
+      "id": "cl-node-04",
+      "name": "Formatea Respuesta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-80, 80],
+      "parameters": {
+        "jsCode": "const row = $input.first().json;\nconst total = Object.values(row).reduce((a, b) => a + b, 0);\nreturn {\n  json: {\n    success: true,\n    message: `Limpieza completada. ${total} registros eliminados en total.`,\n    deleted: row,\n    next_step: 'Ejecutar POST /ia4sdlc-init-content-status con {\"mode\":\"full\"} para reinicializar.'\n  }\n};"
+      }
+    },
+    {
+      "id": "cl-node-05",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [160, 80],
+      "parameters": { "options": {} }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Verifica Confirmación", "type": "main", "index": 0 }]]
+    },
+    "Verifica Confirmación": {
+      "main": [[{ "node": "Limpia Tablas", "type": "main", "index": 0 }]]
+    },
+    "Limpia Tablas": {
+      "main": [[{ "node": "Formatea Respuesta", "type": "main", "index": 0 }]]
+    },
+    "Formatea Respuesta": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

@@ -1,0 +1,335 @@
+{
+  "name": "IA4SDLC - Code Audit",
+  "nodes": [
+    {
+      "id": "ca-note-00",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-1200, -400],
+      "parameters": {
+        "content": "## IA4SDLC - Code Audit\n\n**Propósito:** Audita buenas prácticas y anti-patrones de un programa COBOL usando LLM + PostgreSQL.\n\n**Llamada:**\n```\nPOST /webhook/ia4sdlc-code-audit\n{ \"program_name\": \"CBACT01C\" }\n```\n\n**Tablas escritas:**\n- `audit_runs` — registro de la ejecución\n- `audit_finding_types` — catálogo de tipos de hallazgo (upsert nativo)\n- `audit_findings` — hallazgos individuales por línea (insert nativo)\n\n**Flujo:**\n1. Crea audit_run\n2. LLM analiza original_code\n3. IF hay findings → upsert tipo (Postgres native) + merge id + insert finding (Postgres native)\n4. Cierra audit_run con conteos",
+        "height": 340,
+        "width": 480,
+        "color": 6
+      }
+    },
+    {
+      "id": "ca-node-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [-1200, 80],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ia4sdlc-code-audit",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "ca-node-02",
+      "name": "Extrae Params",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-960, 80],
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\nconst program_name = (body.program_name || '').toUpperCase().trim();\nif (!program_name) throw new Error('program_name es requerido');\nreturn { json: { program_name } };"
+      }
+    },
+    {
+      "id": "ca-node-03",
+      "name": "Busca Programa",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-720, 80],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  p.id           AS program_id,\n  p.program_name,\n  p.program_type,\n  p.original_code,\n  pv.id          AS version_id,\n  pv.line_count,\n  pv.clean_line_count\nFROM cobol_analysis.programs p\nJOIN LATERAL (\n  SELECT id, line_count, clean_line_count\n  FROM cobol_analysis.program_versions\n  WHERE program_id = p.id\n  ORDER BY version_number DESC\n  LIMIT 1\n) pv ON true\nWHERE p.program_name = '{{ $('Extrae Params').first().json.program_name }}'",
+        "options": {}
+      }
+    },
+    {
+      "id": "ca-node-04",
+      "name": "Crea Audit Run",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-480, 80],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO cobol_analysis.audit_runs\n  (triggered_by, status, started_at, notes)\nVALUES (\n  'ia4sdlc-code-audit',\n  'RUNNING',\n  NOW(),\n  'Auditoría de {{ $('Busca Programa').first().json.program_name }} — ejecución n8n {{ $execution.id }}'\n)\nRETURNING id AS run_id",
+        "options": {}
+      }
+    },
+    {
+      "id": "ca-node-05",
+      "name": "Fetch Finding Types",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-240, 80],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT code, name, default_severity FROM cobol_analysis.audit_finding_types ORDER BY code",
+        "options": {}
+      }
+    },
+    {
+      "id": "ca-node-06",
+      "name": "Prepara Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [0, 80],
+      "parameters": {
+        "jsCode": "const prog       = $('Busca Programa').first().json;\nconst existingTypes = $('Fetch Finding Types').all().map(i => i.json);\n\nconst existingTypesText = existingTypes.length > 0\n  ? 'TIPOS DE HALLAZGO YA EXISTENTES (reutizalos cuando aplique):\\n' +\n    existingTypes.map(t => `- ${t.code} | ${t.name} | severidad: ${t.default_severity}`).join('\\n')\n  : 'No hay tipos previos. Creá los que necesites.';\n\nconst knownTypes = `TIPOS CONOCIDOS DE ANTI-PATRONES COBOL (usá estos códigos si aplican):\n- GOTO_USAGE | Uso de GO TO | CRITICAL\n- HARDCODED_VALUE | Valor literal hardcodeado | WARNING\n- MISSING_ERROR_HANDLING | Falta manejo de errores en I/O o SQL | CRITICAL\n- DEAD_CODE | Código inalcanzable | WARNING\n- DEEP_NESTING | Anidamiento excesivo de PERFORMs | WARNING\n- MAGIC_NUMBER | Número sin nombre simbólico | INFO\n- POOR_PARAGRAPH_NAMING | Nombre de párrafo poco descriptivo | INFO\n- MISSING_COMMENTS | Falta de documentación/comentarios | INFO\n- LARGE_PARAGRAPH | Párrafo excesivamente largo (+50 líneas) | WARNING\n- SQL_NO_CHECK | SQL sin verificación de SQLCODE | CRITICAL\n- FILE_NOT_CLOSED | Archivo no cerrado explícitamente | CRITICAL\n- DUPLICATED_CODE | Código duplicado o repetido | WARNING\n- COMPLEX_CONDITION | Condición lógica excesivamente compleja | WARNING\n- OBSOLETE_VERB | Uso de verbo COBOL obsoleto | INFO\n- GLOBAL_VAR_OVERUSE | Exceso de variables globales en WORKING-STORAGE | WARNING`;\n\nconst prompt = `Sos un experto en auditoría de código COBOL mainframe.\nAnalizá el siguiente programa COBOL en busca de anti-patrones, malas prácticas y problemas de calidad.\n\nPROGRAMA: ${prog.program_name} (${prog.program_type})\nLÍNEAS TOTALES: ${prog.line_count} | LÍNEAS DE CÓDIGO: ${prog.clean_line_count}\n\n${existingTypesText}\n\n${knownTypes}\n\nCÓDIGO FUENTE COMPLETO:\n\\`\\`\\`cobol\n${prog.original_code}\n\\`\\`\\`\n\nRetorná EXCLUSIVAMENTE un JSON válido con esta estructura (sin markdown, sin texto adicional):\n{\n  \"summary\": \"resumen ejecutivo de la calidad del código en 2-3 oraciones\",\n  \"overall_quality\": \"POOR|FAIR|GOOD|EXCELLENT\",\n  \"findings\": [\n    {\n      \"type_code\": \"GOTO_USAGE\",\n      \"type_name\": \"Uso de GO TO\",\n      \"type_description\": \"descripción del tipo de anti-patrón\",\n      \"type_default_severity\": \"CRITICAL\",\n      \"severity\": \"CRITICAL\",\n      \"title\": \"título específico del hallazgo\",\n      \"description\": \"explicación detallada del problema y su impacto\",\n      \"line_number\": 42,\n      \"line_content\": \"           GO TO END-PROGRAM.\",\n      \"raw_evidence\": \"contexto de 3-5 líneas alrededor del hallazgo\"\n    }\n  ]\n}\n\nREGLAS:\n- Incluí TODOS los hallazgos encontrados (no limites la cantidad)\n- line_number y line_content son opcionales; ponelos a null si no aplica\n- Los únicos valores válidos para severity y type_default_severity son: CRITICAL, WARNING, INFO\n- severity puede diferir de type_default_severity si el contexto lo justifica\n- Si no hay hallazgos, retorná findings como array vacío\n- El JSON debe ser parseable directamente con JSON.parse()`;\n\nreturn {\n  json: {\n    prompt,\n    program_name: prog.program_name,\n    version_id: prog.version_id,\n    run_id: $('Crea Audit Run').first().json.run_id\n  }\n};"
+      }
+    },
+    {
+      "id": "ca-node-07",
+      "name": "Gemini Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [240, 280],
+      "parameters": {
+        "modelName": "models/gemini-2.0-flash",
+        "options": {}
+      }
+    },
+    {
+      "id": "ca-node-08",
+      "name": "LLM Audita Código",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [240, 80],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('Prepara Prompt').first().json.prompt }}",
+        "batching": {}
+      }
+    },
+    {
+      "id": "ca-node-09",
+      "name": "Parsea Findings",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 80],
+      "parameters": {
+        "jsCode": "const chainOut = $input.first().json;\nconst ctx      = $('Prepara Prompt').first().json;\n\nlet text = (chainOut.text || chainOut.output || '').trim();\ntext = text.replace(/^```(?:json)?\\n?/, '').replace(/\\n?```$/, '').trim();\n\nlet parsed;\ntry {\n  parsed = JSON.parse(text);\n} catch(e) {\n  throw new Error('LLM no retornó JSON válido. Fragmento: ' + text.slice(0, 300));\n}\n\nconst findings = parsed.findings || [];\n\nif (findings.length === 0) {\n  return [{\n    json: {\n      _no_findings: true,\n      audit_run_id: ctx.run_id,\n      version_id: ctx.version_id,\n      program_name: ctx.program_name,\n      summary: parsed.summary || 'Sin hallazgos detectados.',\n      overall_quality: parsed.overall_quality || 'GOOD',\n      findings_count: 0\n    }\n  }];\n}\n\nconst VALID_SEV = ['CRITICAL', 'WARNING', 'INFO'];\nconst SEV_MAP   = { HIGH: 'CRITICAL', MEDIUM: 'WARNING', LOW: 'INFO' };\nconst mapSev = v => {\n  const u = (v || '').toUpperCase();\n  if (VALID_SEV.includes(u)) return u;\n  return SEV_MAP[u] || 'WARNING';\n};\n\nreturn findings.map(f => ({\n  json: {\n    _no_findings: false,\n    audit_run_id: ctx.run_id,\n    version_id:   ctx.version_id,\n    program_name: ctx.program_name,\n    summary:      parsed.summary || '',\n    overall_quality: parsed.overall_quality || 'UNKNOWN',\n    // Tipo de hallazgo\n    type_code:             (f.type_code || 'UNKNOWN_ISSUE').toUpperCase().replace(/\\s+/g,'_').slice(0,50),\n    type_name:             (f.type_name || f.type_code || 'Unknown Issue').slice(0,100),\n    type_description:      f.type_description || '',\n    type_default_severity: mapSev(f.type_default_severity),\n    // Instancia del hallazgo\n    severity:     mapSev(f.severity),\n    title:        (f.title || '').slice(0, 255),\n    description:  f.description || '',\n    line_number:  f.line_number ? parseInt(f.line_number) : null,\n    line_content: f.line_content || null,\n    raw_evidence: f.raw_evidence || null\n  }\n}));"
+      }
+    },
+    {
+      "id": "ca-node-if",
+      "name": "¿Hay Findings?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [720, 80],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-no-findings",
+              "leftValue": "={{ $json._no_findings }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "ca-node-10a",
+      "name": "Upsert Finding Type",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [960, 80],
+      "parameters": {
+        "operation": "upsert",
+        "schema": {
+          "__rl": true,
+          "value": "cobol_analysis",
+          "mode": "name"
+        },
+        "table": {
+          "__rl": true,
+          "value": "audit_finding_types",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "code":             "={{ $json.type_code }}",
+            "name":             "={{ $json.type_name }}",
+            "description":      "={{ $json.type_description }}",
+            "default_severity": "={{ $json.type_default_severity }}"
+          },
+          "matchingColumns": ["code"],
+          "schema": []
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ca-node-10b",
+      "name": "Merge Type ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 80],
+      "parameters": {
+        "jsCode": "// Parea el id retornado por el upsert con los datos del hallazgo original.\n// n8n preserva el orden de items, así que el índice es confiable.\nconst typeResults  = $input.all();\nconst findingItems = $('Parsea Findings').all().filter(i => !i.json._no_findings);\n\nreturn typeResults.map((item, idx) => {\n  const f = findingItems[idx].json;\n  return {\n    json: {\n      finding_type_id:   item.json.id,\n      audit_run_id:      f.audit_run_id,\n      version_id:        f.version_id,\n      finding_severity:  f.severity,\n      title:             f.title,\n      finding_description: f.description,\n      line_number:       f.line_number,\n      line_content:      f.line_content,\n      raw_evidence:      f.raw_evidence\n    }\n  };\n});"
+      }
+    },
+    {
+      "id": "ca-node-10c",
+      "name": "Insert Finding",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1440, 80],
+      "parameters": {
+        "operation": "insert",
+        "schema": {
+          "__rl": true,
+          "value": "cobol_analysis",
+          "mode": "name"
+        },
+        "table": {
+          "__rl": true,
+          "value": "audit_findings",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "audit_run_id":   "={{ $json.audit_run_id }}",
+            "version_id":     "={{ $json.version_id }}",
+            "finding_type_id":"={{ $json.finding_type_id }}",
+            "severity":       "={{ $json.finding_severity }}",
+            "title":          "={{ $json.title }}",
+            "description":    "={{ $json.finding_description }}",
+            "line_number":    "={{ $json.line_number }}",
+            "line_content":   "={{ $json.line_content }}",
+            "raw_evidence":   "={{ $json.raw_evidence }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ca-node-11",
+      "name": "Cuenta y Cierra",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1680, 80],
+      "parameters": {
+        "jsCode": "const all         = $input.all();\nconst first       = $('Parsea Findings').first().json;\nconst no_findings = first._no_findings === true;\nconst findings_count = no_findings ? 0 : all.length;\n\nreturn {\n  json: {\n    audit_run_id:    first.audit_run_id,\n    program_name:    first.program_name,\n    findings_count,\n    summary:         first.summary,\n    overall_quality: first.overall_quality\n  }\n};"
+      }
+    },
+    {
+      "id": "ca-node-12",
+      "name": "Cierra Audit Run",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1920, 80],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE cobol_analysis.audit_runs\nSET\n  status           = 'COMPLETED',\n  completed_at     = NOW(),\n  programs_audited = 1,\n  findings_count   = {{ $json.findings_count }},\n  notes            = notes || ' | Quality: {{ $json.overall_quality }} | ' || $1\nWHERE id = {{ $json.audit_run_id }}",
+        "options": {
+          "queryReplacement": "={{ $json.summary }}"
+        }
+      }
+    },
+    {
+      "id": "ca-node-13",
+      "name": "Formatea Respuesta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2160, 80],
+      "parameters": {
+        "jsCode": "const data = $('Cuenta y Cierra').first().json;\nreturn {\n  json: {\n    success:         true,\n    program_name:    data.program_name,\n    audit_run_id:    data.audit_run_id,\n    findings_count:  data.findings_count,\n    overall_quality: data.overall_quality,\n    summary:         data.summary\n  }\n};"
+      }
+    },
+    {
+      "id": "ca-node-14",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [2400, 80],
+      "parameters": { "options": {} }
+    },
+    {
+      "id": "ca-node-err",
+      "name": "Marca Audit Run Error",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1920, 320],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE cobol_analysis.audit_runs\nSET status = 'ERROR', completed_at = NOW()\nWHERE id = {{ $('Crea Audit Run').first().json.run_id }}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Extrae Params", "type": "main", "index": 0 }]]
+    },
+    "Extrae Params": {
+      "main": [[{ "node": "Busca Programa", "type": "main", "index": 0 }]]
+    },
+    "Busca Programa": {
+      "main": [[{ "node": "Crea Audit Run", "type": "main", "index": 0 }]]
+    },
+    "Crea Audit Run": {
+      "main": [[{ "node": "Fetch Finding Types", "type": "main", "index": 0 }]]
+    },
+    "Fetch Finding Types": {
+      "main": [[{ "node": "Prepara Prompt", "type": "main", "index": 0 }]]
+    },
+    "Prepara Prompt": {
+      "main": [[{ "node": "LLM Audita Código", "type": "main", "index": 0 }]]
+    },
+    "Gemini Chat Model": {
+      "ai_languageModel": [[{ "node": "LLM Audita Código", "type": "ai_languageModel", "index": 0 }]]
+    },
+    "LLM Audita Código": {
+      "main": [[{ "node": "Parsea Findings", "type": "main", "index": 0 }]]
+    },
+    "Parsea Findings": {
+      "main": [[{ "node": "¿Hay Findings?", "type": "main", "index": 0 }]]
+    },
+    "¿Hay Findings?": {
+      "main": [
+        [{ "node": "Upsert Finding Type", "type": "main", "index": 0 }],
+        [{ "node": "Cuenta y Cierra",     "type": "main", "index": 0 }]
+      ]
+    },
+    "Upsert Finding Type": {
+      "main": [[{ "node": "Merge Type ID", "type": "main", "index": 0 }]]
+    },
+    "Merge Type ID": {
+      "main": [[{ "node": "Insert Finding", "type": "main", "index": 0 }]]
+    },
+    "Insert Finding": {
+      "main": [[{ "node": "Cuenta y Cierra", "type": "main", "index": 0 }]]
+    },
+    "Cuenta y Cierra": {
+      "main": [[{ "node": "Cierra Audit Run", "type": "main", "index": 0 }]]
+    },
+    "Cierra Audit Run": {
+      "main": [[{ "node": "Formatea Respuesta", "type": "main", "index": 0 }]]
+    },
+    "Formatea Respuesta": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

@@ -1,0 +1,304 @@
+{
+  "name": "IA4SDLC - Run All",
+  "nodes": [
+    {
+      "id": "ra-note-00",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-1000, -320],
+      "parameters": {
+        "content": "## IA4SDLC - Run All\n\n**Ejecuta el pipeline completo en orden:**\n1. Cleanup\n2. Init Content Status (full)\n3. Technical Doc (por programa)\n4. Quality Audit (por programa)\n5. Functional Doc (por programa)\n6. Code Audit (por programa)\n7. Use Cases (sistema)\n8. Onboarding\n9. System Functional Overview (sistema)\n\n**Responde inmediatamente** y corre\nel pipeline en background.\n\n```\nPOST /webhook/ia4sdlc-run-all\n{}\n```\n\n⚠️ Ajustá BASE_URL en el nodo\n'Config' si n8n no corre en\nlocalhost:5678",
+        "height": 340,
+        "width": 340,
+        "color": 4
+      }
+    },
+    {
+      "id": "ra-node-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [-1000, 80],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ia4sdlc-run-all",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "ra-node-02",
+      "name": "Responde Inmediato",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [-760, -120],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"success\": true, \"message\": \"Pipeline iniciado. Puede tardar varios minutos dependiendo de la cantidad de programas.\", \"order\": [\"cleanup\", \"init_content_status\", \"technical_doc (x programa)\", \"quality_audit (x programa)\", \"functional_doc (x programa)\", \"code_audit (x programa)\", \"use_cases\", \"onboarding\", \"system_functional_overview\"] }",
+        "options": {}
+      }
+    },
+    {
+      "id": "ra-node-03",
+      "name": "Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-760, 80],
+      "parameters": {
+        "jsCode": "// ── Ajustá esta URL si n8n corre en otro host/puerto ──\nconst BASE_URL = 'http://localhost:5678/webhook';\n\nreturn { json: { base_url: BASE_URL } };"
+      }
+    },
+    {
+      "id": "ra-node-04",
+      "name": "HTTP Cleanup",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-520, 80],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.base_url }}/ia4sdlc-cleanup",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"confirm\": true}",
+        "options": { "timeout": 30000 }
+      }
+    },
+    {
+      "id": "ra-node-05",
+      "name": "HTTP Init Content Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-280, 80],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.base_url }}/ia4sdlc-init-content-status",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"mode\": \"full\"}",
+        "options": { "timeout": 60000 }
+      }
+    },
+    {
+      "id": "ra-node-06",
+      "name": "Obtiene Programas",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-40, 80],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT program_name\nFROM cobol_analysis.programs\nWHERE program_type = 'CBL'\nORDER BY program_name",
+        "options": {}
+      }
+    },
+    {
+      "id": "ra-node-07",
+      "name": "HTTP Technical Doc",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [200, 80],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.base_url }}/ia4sdlc-technical-doc",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ program_name: $json.program_name }) }}",
+        "options": { "timeout": 300000 }
+      }
+    },
+    {
+      "id": "ra-node-08",
+      "name": "Prepara Quality Audit",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 80],
+      "parameters": {
+        "jsCode": "return $('Obtiene Programas').all().map(i => ({ json: { program_name: i.json.program_name } }));"
+      }
+    },
+    {
+      "id": "ra-node-09",
+      "name": "HTTP Quality Audit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 80],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.base_url }}/ia4sdlc-quality-audit",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ program_name: $json.program_name }) }}",
+        "options": { "timeout": 300000 }
+      }
+    },
+    {
+      "id": "ra-node-10",
+      "name": "Prepara Functional Doc",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 80],
+      "parameters": {
+        "jsCode": "return $('Obtiene Programas').all().map(i => ({ json: { program_name: i.json.program_name } }));"
+      }
+    },
+    {
+      "id": "ra-node-11",
+      "name": "HTTP Functional Doc",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1160, 80],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.base_url }}/ia4sdlc-functional-doc",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ program_name: $json.program_name }) }}",
+        "options": { "timeout": 300000 }
+      }
+    },
+    {
+      "id": "ra-node-10b",
+      "name": "Prepara Code Audit",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1400, 80],
+      "parameters": {
+        "jsCode": "return $('Obtiene Programas').all().map(i => ({ json: { program_name: i.json.program_name } }));"
+      }
+    },
+    {
+      "id": "ra-node-11b",
+      "name": "HTTP Code Audit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1640, 80],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.base_url }}/ia4sdlc-code-audit",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ program_name: $json.program_name }) }}",
+        "options": { "timeout": 300000 }
+      }
+    },
+    {
+      "id": "ra-node-12",
+      "name": "Trigger Use Cases",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1880, 80],
+      "parameters": {
+        "jsCode": "// Colapsa todos los items a uno solo para los llamados de sistema\nreturn { json: { ready: true } };"
+      }
+    },
+    {
+      "id": "ra-node-13",
+      "name": "HTTP Use Cases",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2120, 80],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.base_url }}/ia4sdlc-use-cases",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{}",
+        "options": { "timeout": 300000 }
+      }
+    },
+    {
+      "id": "ra-node-14",
+      "name": "HTTP Onboarding",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2360, 80],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.base_url }}/ia4sdlc-onboarding",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{}",
+        "options": { "timeout": 300000 }
+      }
+    },
+    {
+      "id": "ra-node-15",
+      "name": "HTTP System Functional Overview",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2600, 80],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.base_url }}/ia4sdlc-system-functional-overview",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{}",
+        "options": { "timeout": 600000 }
+      }
+    },
+    {
+      "id": "ra-note-end",
+      "name": "Sticky Note1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [2600, -160],
+      "parameters": {
+        "content": "Pipeline completo.\nEl resultado queda en las tablas\nde PostgreSQL.",
+        "height": 80,
+        "width": 240,
+        "color": 5
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[
+        { "node": "Responde Inmediato", "type": "main", "index": 0 },
+        { "node": "Config",             "type": "main", "index": 0 }
+      ]]
+    },
+    "Config": {
+      "main": [[{ "node": "HTTP Cleanup", "type": "main", "index": 0 }]]
+    },
+    "HTTP Cleanup": {
+      "main": [[{ "node": "HTTP Init Content Status", "type": "main", "index": 0 }]]
+    },
+    "HTTP Init Content Status": {
+      "main": [[{ "node": "Obtiene Programas", "type": "main", "index": 0 }]]
+    },
+    "Obtiene Programas": {
+      "main": [[{ "node": "HTTP Technical Doc", "type": "main", "index": 0 }]]
+    },
+    "HTTP Technical Doc": {
+      "main": [[{ "node": "Prepara Quality Audit", "type": "main", "index": 0 }]]
+    },
+    "Prepara Quality Audit": {
+      "main": [[{ "node": "HTTP Quality Audit", "type": "main", "index": 0 }]]
+    },
+    "HTTP Quality Audit": {
+      "main": [[{ "node": "Prepara Functional Doc", "type": "main", "index": 0 }]]
+    },
+    "Prepara Functional Doc": {
+      "main": [[{ "node": "HTTP Functional Doc", "type": "main", "index": 0 }]]
+    },
+    "HTTP Functional Doc": {
+      "main": [[{ "node": "Prepara Code Audit", "type": "main", "index": 0 }]]
+    },
+    "Prepara Code Audit": {
+      "main": [[{ "node": "HTTP Code Audit", "type": "main", "index": 0 }]]
+    },
+    "HTTP Code Audit": {
+      "main": [[{ "node": "Trigger Use Cases", "type": "main", "index": 0 }]]
+    },
+    "Trigger Use Cases": {
+      "main": [[{ "node": "HTTP Use Cases", "type": "main", "index": 0 }]]
+    },
+    "HTTP Use Cases": {
+      "main": [[{ "node": "HTTP Onboarding", "type": "main", "index": 0 }]]
+    },
+    "HTTP Onboarding": {
+      "main": [[{ "node": "HTTP System Functional Overview", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

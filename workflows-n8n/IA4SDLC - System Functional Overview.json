@@ -1,0 +1,360 @@
+{
+  "name": "IA4SDLC - System Functional Overview",
+  "nodes": [
+    {
+      "id": "sfo-note-00",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-1200, -400],
+      "parameters": {
+        "content": "## IA4SDLC - System Functional Overview\n\n**Propósito:** Genera documentación funcional completa del sistema CardDemo a nivel global, consultando PostgreSQL y dos colecciones Qdrant.\n\n**Llamada:**\n```\nPOST /webhook/ia4sdlc-system-functional-overview\n{} \n// opcional: { \"force\": true } para omitir caché\n```\n\n**Fuentes:**\n- PostgreSQL: stats del sistema, lista de programas, relaciones\n- Qdrant `carddemo_cobol_simple`: búsqueda semántica (dense)\n- Qdrant `carddemo_cobol`: búsqueda híbrida (dense + sparse)\n\n**Output:** Markdown + HTML guardados en `cobol_analysis.system_functional_overview`",
+        "height": 320,
+        "width": 500,
+        "color": 3
+      }
+    },
+    {
+      "id": "sfo-node-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [-1200, 80],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ia4sdlc-system-functional-overview",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "sfo-node-02",
+      "name": "Extrae System ID",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-960, 80],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  s.id::text          AS system_id,\n  s.name              AS system_name,\n  s.description       AS system_description,\n  sfo.functional_md   IS NOT NULL AS has_doc,\n  sfo.updated_at      AS doc_updated_at,\n  cgs.status          AS gen_status,\n  cgs.generated_for_program_count,\n  cgs.generated_for_max_updated_at\nFROM public.\"System\" s\nLEFT JOIN cobol_analysis.system_functional_overview sfo\n  ON sfo.system_id = s.id\nLEFT JOIN cobol_analysis.content_generation_status cgs\n  ON  cgs.scope        = 'system'\n  AND cgs.content_type = 'functional_doc_system'\n  AND cgs.resource_key = s.id::text\nLIMIT 1",
+        "options": {}
+      }
+    },
+    {
+      "id": "sfo-node-03",
+      "name": "Evalúa Caché",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-720, 80],
+      "parameters": {
+        "jsCode": "const row   = $input.first().json;\nconst body  = $('Webhook').first().json.body || {};\nconst force = body.force === true || body.force === 'true';\n\nif (!row.system_id) throw new Error('No se encontró ningún sistema en public.System');\n\nconst use_cache = (\n  !force &&\n  row.has_doc === true &&\n  row.gen_status === 'completed'\n);\n\nreturn {\n  json: {\n    system_id:        row.system_id,\n    system_name:      row.system_name,\n    system_description: row.system_description,\n    has_doc:          row.has_doc,\n    doc_updated_at:   row.doc_updated_at,\n    gen_status:       row.gen_status,\n    use_cache,\n    force\n  }\n};"
+      }
+    },
+    {
+      "id": "sfo-node-04",
+      "name": "¿Usar caché?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [-480, 80],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "loose", "version": 3 },
+          "conditions": [
+            {
+              "id": "cond-cache",
+              "leftValue": "={{ $json.use_cache }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "sfo-node-05",
+      "name": "Fetch Doc Existente",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-240, -160],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT functional_md, content_html, updated_at\nFROM cobol_analysis.system_functional_overview\nWHERE system_id = '{{ $('Evalúa Caché').first().json.system_id }}'::uuid",
+        "options": {}
+      }
+    },
+    {
+      "id": "sfo-node-06",
+      "name": "Formatea Respuesta Caché",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [0, -160],
+      "parameters": {
+        "jsCode": "const row  = $input.first().json;\nconst ctx  = $('Evalúa Caché').first().json;\nreturn {\n  json: {\n    success:      true,\n    from_cache:   true,\n    system_id:    ctx.system_id,\n    system_name:  ctx.system_name,\n    functional_md: row.functional_md,\n    content_html: row.content_html,\n    generated_at: row.updated_at\n  }\n};"
+      }
+    },
+    {
+      "id": "sfo-node-07",
+      "name": "Recopila Estadísticas",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-240, 280],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  COUNT(*)::int                                          AS total_programs,\n  SUM(pv.line_count)::int                                AS total_lines,\n  SUM(pv.clean_line_count)::int                          AS total_clean_lines,\n  string_agg(DISTINCT COALESCE(NULLIF(TRIM(p.program_type),''),'UNKNOWN'), ', ' ORDER BY COALESCE(NULLIF(TRIM(p.program_type),''),'UNKNOWN')) AS program_types,\n  COUNT(DISTINCT pc.called_program_name)::int            AS distinct_callees,\n  COUNT(DISTINCT ci.copybook_name)::int                  AS distinct_copybooks,\n  COUNT(DISTINCT fa.logical_name)::int                   AS distinct_files,\n  COUNT(DISTINCT da.table_name)::int                     AS distinct_db2_tables,\n  MAX(pv.updated_at)::text                               AS last_updated_at\nFROM cobol_analysis.programs p\nJOIN LATERAL (\n  SELECT id, line_count, clean_line_count, updated_at\n  FROM cobol_analysis.program_versions\n  WHERE program_id = p.id\n  ORDER BY version_number DESC\n  LIMIT 1\n) pv ON true\nLEFT JOIN cobol_analysis.program_calls pc\n  ON pc.caller_version_id = pv.id\nLEFT JOIN cobol_analysis.copybook_inclusions ci\n  ON ci.version_id = pv.id\nLEFT JOIN cobol_analysis.file_accesses fa\n  ON fa.version_id = pv.id\nLEFT JOIN cobol_analysis.db2_accesses da\n  ON da.version_id = pv.id\nWHERE p.is_current = true",
+        "options": {}
+      }
+    },
+    {
+      "id": "sfo-node-08",
+      "name": "Marca In Progress",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [0, 280],
+      "alwaysOutputData": true,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO cobol_analysis.content_generation_status\n  (content_type, scope, resource_key, status, n8n_execution_id, generated_for_program_count, generated_for_max_updated_at, created_at, updated_at)\nVALUES (\n  'functional_doc_system',\n  'system',\n  '{{ $('Evalúa Caché').first().json.system_id }}',\n  'in_progress',\n  '{{ $execution.id }}',\n  {{ $('Recopila Estadísticas').first().json.total_programs }},\n  '{{ $('Recopila Estadísticas').first().json.last_updated_at }}'::timestamptz,\n  NOW(), NOW()\n)\nON CONFLICT (content_type, scope, resource_key)\nDO UPDATE SET\n  status                       = 'in_progress',\n  n8n_execution_id             = EXCLUDED.n8n_execution_id,\n  generated_for_program_count  = EXCLUDED.generated_for_program_count,\n  generated_for_max_updated_at = EXCLUDED.generated_for_max_updated_at,\n  updated_at                   = NOW()",
+        "options": {}
+      }
+    },
+    {
+      "id": "sfo-node-09",
+      "name": "Prepara Prompt del Agente",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 280],
+      "parameters": {
+        "jsCode": "const ctx   = $('Evalúa Caché').first().json;\nconst stats = $('Recopila Estadísticas').first().json;\n\nconst prompt = `Sos un analista funcional senior especialista en sistemas bancarios mainframe.\n\nTu tarea es generar la documentación funcional completa del sistema **${ctx.system_name}** analizando la totalidad de sus programas COBOL.\n\nCONTEXTO INICIAL DEL SISTEMA (obtenido de PostgreSQL):\n- Total de programas: ${stats.total_programs}\n- Líneas de código totales: ${stats.total_lines} (limpias: ${stats.total_clean_lines})\n- Tipos de programas: ${stats.program_types}\n- Programas externos invocados: ${stats.distinct_callees}\n- Copybooks distintos: ${stats.distinct_copybooks}\n- Archivos físicos accedidos: ${stats.distinct_files}\n- Tablas DB2 accedidas: ${stats.distinct_db2_tables}\n\nPARA GENERAR EL DOCUMENTO, seguí estos pasos:\n1. Usá la herramienta PostgreSQL para obtener la lista completa de programas, sus tipos y relaciones entre ellos.\n2. Usá Qdrant Simple para buscar semánticamente: procesos de negocio, entidades de dominio (cuentas, tarjetas, clientes, transacciones), reglas de negocio clave.\n3. Usá Qdrant Híbrido para búsquedas por términos específicos del dominio bancario: ACCOUNT, CARD, TRANSACTION, INTEREST, STATEMENT, USER, AUTH.\n4. Sintetizá toda la información y generá el documento funcional completo en Markdown.\n\nESTRUCTURA REQUERIDA DEL DOCUMENTO (usá EXACTAMENTE estos encabezados):\n\n# ${ctx.system_name} — Documentación Funcional del Sistema\n\n## 1. Visión General del Sistema\n[Qué es el sistema, a qué dominio de negocio pertenece, cuál es su propósito principal. 3-4 párrafos.]\n\n## 2. Módulos Funcionales\n[Agrupá los programas por función de negocio. Por ejemplo: 'Gestión de Cuentas', 'Procesamiento de Transacciones', 'Generación de Extractos', 'Administración de Usuarios'. Para cada módulo, listá los programas que lo componen y describí su función.]\n\n## 3. Entidades de Negocio del Sistema\n[Tabla con las entidades principales del dominio (Cuenta, Tarjeta, Cliente, Transacción, Extracto, etc.) con su descripción y los programas que las gestionan.]\n\n| Entidad | Descripción | Programas que la gestionan |\n|---------|-------------|---------------------------|\n\n## 4. Procesos de Negocio Principales\n[Descripción de los flujos de negocio end-to-end más importantes. Por ejemplo: 'Ciclo de vida de una cuenta', 'Procesamiento de un pago', 'Generación mensual de extractos'.]\n\n## 5. Reglas de Negocio del Sistema\n[Lista numerada de las reglas de negocio más importantes identificadas en el código. Organizadas por dominio funcional.]\n\n## 6. Arquitectura Funcional\n[Cómo se relacionan los módulos entre sí. Flujo de datos entre programas. Dependencias funcionales clave.]\n\n## 7. Integraciones Externas\n[Archivos físicos de entrada/salida, tablas DB2 que conectan con otros sistemas, llamadas a sistemas externos.]\n\n## 8. Restricciones y Limitaciones Funcionales\n[Limitaciones conocidas del sistema desde la perspectiva del negocio. Áreas de deuda funcional.]\n\n## 9. Glosario del Sistema\n[Términos de negocio específicos del dominio con su significado en el contexto de este sistema.]\n\n| Término | Significado |\n|---------|-------------|\n\nIMPORTANTE: El documento debe estar escrito en español, orientado a analistas de negocio, no a programadores. Debe ser exhaustivo y cubrir la totalidad del sistema.`;\n\nreturn { json: { prompt, system_id: ctx.system_id, system_name: ctx.system_name } };"
+      }
+    },
+    {
+      "id": "sfo-node-10",
+      "name": "Gemini Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [480, 500],
+      "parameters": {
+        "modelName": "models/gemini-2.0-flash",
+        "options": {}
+      }
+    },
+    {
+      "id": "sfo-node-11",
+      "name": "Embeddings Gemini Simple",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsGoogleGemini",
+      "typeVersion": 1,
+      "position": [700, 640],
+      "parameters": {
+        "modelName": "models/gemini-embedding-2-preview"
+      }
+    },
+    {
+      "id": "sfo-node-12",
+      "name": "Qdrant Simple",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreQdrant",
+      "typeVersion": 1.3,
+      "position": [700, 500],
+      "parameters": {
+        "mode": "retrieve-as-tool",
+        "toolDescription": "Busca fragmentos de código y lógica COBOL por similitud semántica en la colección carddemo_cobol_simple (vectores densos). Usala para encontrar lógica de negocio, procesos funcionales y comportamiento de los programas.",
+        "qdrantCollection": {
+          "__rl": true,
+          "value": "carddemo_cobol_simple",
+          "mode": "list",
+          "cachedResultName": "carddemo_cobol_simple"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "sfo-node-13",
+      "name": "Embeddings Gemini Hybrid",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsGoogleGemini",
+      "typeVersion": 1,
+      "position": [920, 640],
+      "parameters": {
+        "modelName": "models/gemini-embedding-2-preview"
+      }
+    },
+    {
+      "id": "sfo-node-14",
+      "name": "Qdrant Hybrid",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreQdrant",
+      "typeVersion": 1.3,
+      "position": [920, 500],
+      "parameters": {
+        "mode": "retrieve-as-tool",
+        "toolDescription": "Busca en la colección carddemo_cobol (híbrida, dense + sparse/BM25). Usala para búsquedas por términos exactos del dominio bancario: ACCOUNT, CARD, TRANSACTION, INTEREST, STATEMENT, USER, PAYMENT, BALANCE. Complementa la búsqueda semántica con coincidencia de palabras clave.",
+        "qdrantCollection": {
+          "__rl": true,
+          "value": "carddemo_cobol",
+          "mode": "list",
+          "cachedResultName": "carddemo_cobol"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "sfo-node-15",
+      "name": "Postgres Tool",
+      "type": "n8n-nodes-base.postgresTool",
+      "typeVersion": 2.6,
+      "position": [480, 340],
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Consulta la vista v_program_master_dashboard en PostgreSQL que contiene todos los programas COBOL con sus métricas, tipos, relaciones con otros programas, copybooks, archivos y tablas DB2. Usala para obtener listados, estadísticas y relaciones estructurales entre programas.",
+        "operation": "select",
+        "schema": {
+          "__rl": true,
+          "value": "cobol_analysis",
+          "mode": "list",
+          "cachedResultName": "cobol_analysis"
+        },
+        "table": {
+          "__rl": true,
+          "value": "v_program_master_dashboard",
+          "mode": "list",
+          "cachedResultName": "v_program_master_dashboard"
+        },
+        "limit": 100,
+        "options": {}
+      }
+    },
+    {
+      "id": "sfo-node-16",
+      "name": "Agente Funcional del Sistema",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [480, 280],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('Prepara Prompt del Agente').first().json.prompt }}",
+        "options": {
+          "systemMessage": "Sos un analista funcional senior especialista en sistemas bancarios y mainframe COBOL. Tu misión en esta ejecución es generar documentación funcional exhaustiva del sistema, NO responder preguntas puntuales.\n\nHERRAMIENTAS DISPONIBLES Y CUÁNDO USARLAS:\n\n1. **Postgres Tool** — Úsala PRIMERO para obtener:\n   - Lista completa de programas y sus tipos\n   - Relaciones entre programas (qué llama a qué)\n   - Métricas de complejidad\n   - Archivos y tablas DB2 accedidas\n\n2. **Qdrant Simple** — Úsala para búsquedas semánticas sobre lógica de negocio:\n   - 'gestión de cuentas bancarias'\n   - 'procesamiento de transacciones'\n   - 'validación de usuarios y autenticación'\n   - 'generación de extractos y reportes'\n   - 'cálculo de intereses y balances'\n\n3. **Qdrant Hybrid** — Úsala para términos exactos del dominio:\n   - Términos técnicos: ACCOUNT-ID, CARD-NUM, TRAN-TYPE-CD\n   - Procesos: INTEREST-CALCULATION, STATEMENT-GENERATION\n   - Entidades: CUSTOMER-DATA, TRANSACTION-RECORD\n\nESTRATEGIA:\n- Realizá AL MENOS 3 consultas a Qdrant Simple con diferentes términos de negocio\n- Realizá AL MENOS 3 consultas a Qdrant Hybrid con términos técnicos del dominio\n- Consultá Postgres para obtener la lista de programas agrupables por función\n- Sintetizá TODO en el documento final\n\nFORMATO DE SALIDA:\n- Únicamente el documento Markdown, comenzando con el título # ...\n- Sin comentarios previos ni posteriores al documento\n- En español, orientado a negocio"
+        }
+      }
+    },
+    {
+      "id": "sfo-node-17",
+      "name": "Genera HTML y Prepara Datos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 280],
+      "parameters": {
+        "jsCode": "const agentOut   = $input.first().json;\nconst ctx        = $('Evalúa Caché').first().json;\nconst stats      = $('Recopila Estadísticas').first().json;\n\nconst functional_md = (agentOut.output || agentOut.text || '').trim();\n\nif (!functional_md) throw new Error('El agente no retornó contenido');\n\n// Convierte Markdown a HTML\nconst mdToHtml = (md) => {\n  return md\n    .replace(/^# (.+)$/gm,    '<h1>$1</h1>')\n    .replace(/^## (.+)$/gm,   '<h2>$1</h2>')\n    .replace(/^### (.+)$/gm,  '<h3>$1</h3>')\n    .replace(/^#### (.+)$/gm, '<h4>$1</h4>')\n    .replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>')\n    .replace(/\\*(.+?)\\*/g,    '<em>$1</em>')\n    .replace(/`(.+?)`/g,      '<code>$1</code>')\n    .replace(/^\\| (.+) \\|$/gm, (m) => '<tr>' + m.split('|').filter(c => c.trim()).map(c => `<td>${c.trim()}</td>`).join('') + '</tr>')\n    .replace(/^- (.+)$/gm,    '<li>$1</li>')\n    .replace(/^\\d+\\. (.+)$/gm, '<li>$1</li>')\n    .replace(/(<li>.*<\\/li>\\n?)+/g,  s => `<ul>${s}</ul>`)\n    .replace(/(<tr>.*<\\/tr>\\n?)+/g,  s => `<table>${s}</table>`)\n    .replace(/\\n{2,}/g, '</p><p>')\n    .replace(/^(?!<[h|u|t|l|p])/gm, '');\n};\n\nconst body_html = mdToHtml(functional_md);\n\nconst content_html = `<!DOCTYPE html>\n<html lang=\"es\">\n<head><meta charset=\"UTF-8\">\n<title>${ctx.system_name} — Documentación Funcional del Sistema</title>\n<style>\n  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;padding:32px;max-width:960px;color:#111;line-height:1.7;}\n  h1{font-size:26px;border-bottom:3px solid #059669;padding-bottom:10px;color:#064e3b;margin-bottom:8px;}\n  h2{font-size:19px;margin-top:36px;color:#047857;border-bottom:1px solid #d1fae5;padding-bottom:5px;}\n  h3{font-size:15px;color:#374151;margin-top:20px;}\n  h4{font-size:13px;color:#6b7280;margin-top:12px;text-transform:uppercase;letter-spacing:.05em;}\n  table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14px;}\n  td,th{border:1px solid #e5e7eb;padding:9px 14px;text-align:left;vertical-align:top;}\n  tr:first-child td{background:#ecfdf5;font-weight:600;}\n  tr:nth-child(even) td{background:#f9fafb;}\n  code{background:#f3f4f6;padding:2px 6px;border-radius:4px;font-size:13px;font-family:'JetBrains Mono',monospace;}\n  ul,ol{padding-left:22px;}\n  li{margin-bottom:5px;}\n  p{margin:10px 0;}\n  .meta{background:#ecfdf5;border-left:4px solid #059669;padding:14px 18px;margin-bottom:28px;border-radius:4px;font-size:13px;color:#374151;display:flex;gap:24px;flex-wrap:wrap;}\n  .meta span{white-space:nowrap;}\n</style>\n</head>\n<body>\n<div class=\"meta\">\n  <span><strong>Sistema:</strong> ${ctx.system_name}</span>\n  <span><strong>Programas:</strong> ${stats.total_programs}</span>\n  <span><strong>Líneas:</strong> ${(stats.total_lines || 0).toLocaleString('es-AR')}</span>\n  <span><strong>Generado:</strong> ${new Date().toLocaleDateString('es-AR')}</span>\n</div>\n${body_html}\n</body></html>`;\n\nreturn {\n  json: {\n    system_id:    ctx.system_id,\n    system_name:  ctx.system_name,\n    functional_md,\n    content_html\n  }\n};"
+      }
+    },
+    {
+      "id": "sfo-node-18",
+      "name": "UPSERT system_functional_overview",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [960, 280],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO cobol_analysis.system_functional_overview\n  (system_id, functional_md, content_html, created_at, updated_at)\nVALUES (\n  '{{ $json.system_id }}'::uuid,\n  $1,\n  $2,\n  NOW(),\n  NOW()\n)\nON CONFLICT (system_id) DO UPDATE\nSET\n  functional_md = EXCLUDED.functional_md,\n  content_html  = EXCLUDED.content_html,\n  updated_at    = NOW()\nRETURNING system_id::text AS system_id",
+        "options": {
+          "queryReplacement": "={{ $json.functional_md }}, {{ $json.content_html }}"
+        }
+      }
+    },
+    {
+      "id": "sfo-node-19",
+      "name": "UPDATE Status Completado",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1200, 280],
+      "alwaysOutputData": true,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE cobol_analysis.content_generation_status\nSET\n  status       = 'completed',\n  generated_at = NOW(),\n  output_table = 'system_functional_overview',\n  updated_at   = NOW()\nWHERE scope        = 'system'\n  AND content_type = 'functional_doc_system'\n  AND resource_key = '{{ $('Genera HTML y Prepara Datos').first().json.system_id }}'",
+        "options": {}
+      }
+    },
+    {
+      "id": "sfo-node-20",
+      "name": "Formatea Respuesta Nueva",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 280],
+      "parameters": {
+        "jsCode": "const data = $('Genera HTML y Prepara Datos').first().json;\nreturn {\n  json: {\n    success:       true,\n    from_cache:    false,\n    system_id:     data.system_id,\n    system_name:   data.system_name,\n    functional_md: data.functional_md,\n    content_html:  data.content_html,\n    generated_at:  new Date().toISOString()\n  }\n};"
+      }
+    },
+    {
+      "id": "sfo-node-21",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [1680, 80],
+      "parameters": { "options": {} }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Extrae System ID", "type": "main", "index": 0 }]]
+    },
+    "Extrae System ID": {
+      "main": [[{ "node": "Evalúa Caché", "type": "main", "index": 0 }]]
+    },
+    "Evalúa Caché": {
+      "main": [[{ "node": "¿Usar caché?", "type": "main", "index": 0 }]]
+    },
+    "¿Usar caché?": {
+      "main": [
+        [{ "node": "Fetch Doc Existente",   "type": "main", "index": 0 }],
+        [{ "node": "Recopila Estadísticas", "type": "main", "index": 0 }]
+      ]
+    },
+    "Fetch Doc Existente": {
+      "main": [[{ "node": "Formatea Respuesta Caché", "type": "main", "index": 0 }]]
+    },
+    "Formatea Respuesta Caché": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    },
+    "Recopila Estadísticas": {
+      "main": [[{ "node": "Marca In Progress", "type": "main", "index": 0 }]]
+    },
+    "Marca In Progress": {
+      "main": [[{ "node": "Prepara Prompt del Agente", "type": "main", "index": 0 }]]
+    },
+    "Prepara Prompt del Agente": {
+      "main": [[{ "node": "Agente Funcional del Sistema", "type": "main", "index": 0 }]]
+    },
+    "Gemini Chat Model": {
+      "ai_languageModel": [[{ "node": "Agente Funcional del Sistema", "type": "ai_languageModel", "index": 0 }]]
+    },
+    "Qdrant Simple": {
+      "ai_tool": [[{ "node": "Agente Funcional del Sistema", "type": "ai_tool", "index": 0 }]]
+    },
+    "Embeddings Gemini Simple": {
+      "ai_embedding": [[{ "node": "Qdrant Simple", "type": "ai_embedding", "index": 0 }]]
+    },
+    "Qdrant Hybrid": {
+      "ai_tool": [[{ "node": "Agente Funcional del Sistema", "type": "ai_tool", "index": 0 }]]
+    },
+    "Embeddings Gemini Hybrid": {
+      "ai_embedding": [[{ "node": "Qdrant Hybrid", "type": "ai_embedding", "index": 0 }]]
+    },
+    "Postgres Tool": {
+      "ai_tool": [[{ "node": "Agente Funcional del Sistema", "type": "ai_tool", "index": 0 }]]
+    },
+    "Agente Funcional del Sistema": {
+      "main": [[{ "node": "Genera HTML y Prepara Datos", "type": "main", "index": 0 }]]
+    },
+    "Genera HTML y Prepara Datos": {
+      "main": [[{ "node": "UPSERT system_functional_overview", "type": "main", "index": 0 }]]
+    },
+    "UPSERT system_functional_overview": {
+      "main": [[{ "node": "UPDATE Status Completado", "type": "main", "index": 0 }]]
+    },
+    "UPDATE Status Completado": {
+      "main": [[{ "node": "Formatea Respuesta Nueva", "type": "main", "index": 0 }]]
+    },
+    "Formatea Respuesta Nueva": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

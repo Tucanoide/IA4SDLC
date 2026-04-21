@@ -1,0 +1,90 @@
+{
+  "name": "IA4SDLC - Content Status API",
+  "nodes": [
+    {
+      "id": "csa-note-00",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-960, -280],
+      "parameters": {
+        "content": "## IA4SDLC - Content Status API\n\n**Propósito:** Expone el estado de generación de contenido para el frontend.\n\n**Query params opcionales:**\n- `program_name` → filtra por programa (ej: CBACT04C)\n- `status` → filtra por estado, separado por comas (ej: pending,stale)\n- `scope` → filtra por scope (program | system)\n- `content_type` → filtra por tipo (technical_doc, quality_audit, etc.)\n\n**Ejemplos:**\n```\nGET /webhook/ia4sdlc-content-status\nGET /webhook/ia4sdlc-content-status?program_name=CBACT04C\nGET /webhook/ia4sdlc-content-status?status=pending,stale\nGET /webhook/ia4sdlc-content-status?scope=system\n```",
+        "height": 270,
+        "width": 500,
+        "color": 7
+      }
+    },
+    {
+      "id": "csa-node-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [-960, 80],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "ia4sdlc-content-status",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "csa-node-02",
+      "name": "Construye SQL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-720, 80],
+      "parameters": {
+        "jsCode": "const q = $input.first().json.query || {};\n\nconst conditions = ['1=1'];\n\nif (q.program_name) {\n  const safe = q.program_name.toUpperCase().replace(/[^A-Z0-9-]/g, '');\n  conditions.push(`cgs.program_name = '${safe}'`);\n}\n\nif (q.status) {\n  const statuses = q.status.split(',').map(s => `'${s.trim()}'`).join(',');\n  conditions.push(`cgs.status IN (${statuses})`);\n}\n\nif (q.scope) {\n  const safe = q.scope.toLowerCase().replace(/[^a-z]/g, '');\n  conditions.push(`cgs.scope = '${safe}'`);\n}\n\nif (q.content_type) {\n  const safe = q.content_type.toLowerCase().replace(/[^a-z_]/g, '');\n  conditions.push(`cgs.content_type = '${safe}'`);\n}\n\nconst sql = `\nSELECT\n  cgs.id,\n  cgs.content_type,\n  cgs.scope,\n  cgs.program_name,\n  cgs.resource_key,\n  cgs.status,\n  cgs.generated_at,\n  cgs.output_table,\n  cgs.output_id,\n  cgs.error_message,\n  cgs.retry_count,\n  cgs.updated_at\nFROM cobol_analysis.content_generation_status cgs\nWHERE ${conditions.join('\\n  AND ')}\nORDER BY cgs.scope DESC, cgs.program_name, cgs.content_type\n`;\n\nreturn { json: { sql } };"
+      }
+    },
+    {
+      "id": "csa-node-03",
+      "name": "Consulta Status",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [-480, 80],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.sql }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "csa-node-04",
+      "name": "Formatea Respuesta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-240, 80],
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\n// Totales por status\nconst totals = { pending: 0, stale: 0, completed: 0, in_progress: 0, failed: 0 };\nfor (const item of items) {\n  const s = item.json.status;\n  if (totals[s] !== undefined) totals[s]++;\n}\n\n// Agrupa por programa para scope=program, plano para scope=system\nconst byProgram = {};\nconst systemItems = [];\n\nfor (const item of items) {\n  const row = item.json;\n\n  if (row.scope === 'program') {\n    const key = row.program_name;\n    if (!byProgram[key]) byProgram[key] = { program_name: key, scope: 'program', content: {} };\n    byProgram[key].content[row.content_type] = {\n      id:           row.id,\n      status:       row.status,\n      generated_at: row.generated_at,\n      output_id:    row.output_id,\n      output_table: row.output_table,\n      error_message:row.error_message,\n      retry_count:  row.retry_count,\n      updated_at:   row.updated_at\n    };\n  } else {\n    systemItems.push({\n      id:           row.id,\n      content_type: row.content_type,\n      scope:        row.scope,\n      resource_key: row.resource_key,\n      status:       row.status,\n      generated_at: row.generated_at,\n      output_id:    row.output_id,\n      error_message:row.error_message,\n      updated_at:   row.updated_at\n    });\n  }\n}\n\nreturn {\n  json: {\n    success:  true,\n    total:    items.length,\n    totals,\n    programs: Object.values(byProgram),\n    system:   systemItems\n  }\n};"
+      }
+    },
+    {
+      "id": "csa-node-05",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [0, 80],
+      "parameters": {
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Construye SQL", "type": "main", "index": 0 }]]
+    },
+    "Construye SQL": {
+      "main": [[{ "node": "Consulta Status", "type": "main", "index": 0 }]]
+    },
+    "Consulta Status": {
+      "main": [[{ "node": "Formatea Respuesta", "type": "main", "index": 0 }]]
+    },
+    "Formatea Respuesta": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
