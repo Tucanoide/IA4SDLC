@@ -350,95 +350,92 @@ function OnboardingView({ profiles }: { profiles: OnboardingProfile[] }) {
 }
 
 // ── Use Cases View ─────────────────────────────────────────────────────────
+interface UCGroup {
+  id: string;
+  name: string;
+  programs: string[];
+  use_cases: { id: string; title: string }[];
+}
+
 function UseCasesView({ entries }: { entries: UseCaseEntry[] }) {
-  const [activeId, setActiveId] = useState('');
-  const [toc, setToc] = useState<{ id: string; text: string; level: number }[]>([]);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const headingEls = useRef<Map<string, HTMLElement>>(new Map());
-
-  const combinedHtml = entries.map((e) => e.content_html || '').join('\n');
-
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    headingEls.current.clear();
-    const headings = Array.from(container.querySelectorAll('h2, h3, h4'));
-    const items = headings.map((h, i) => {
-      const id = `uc-h-${i}`;
-      (h as HTMLElement).setAttribute('id', id);
-      headingEls.current.set(id, h as HTMLElement);
-      return { id, text: h.textContent?.trim() ?? '', level: parseInt(h.tagName[1]) };
-    });
-    setToc(items);
-    if (items.length) setActiveId(items[0].id);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [combinedHtml]);
-
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container || !toc.length) return;
-    const obs = new IntersectionObserver(
-      (entries) => {
-        const visible = entries.find((e) => e.isIntersecting);
-        if (visible) setActiveId(visible.target.id);
-      },
-      { root: container, rootMargin: '0px 0px -60% 0px', threshold: 0 }
-    );
-    toc.forEach((item) => {
-      const h = headingEls.current.get(item.id);
-      if (h) obs.observe(h);
-    });
-    return () => obs.disconnect();
-  }, [toc]);
-
-  const scrollTo = (id: string) => {
-    const container = containerRef.current;
-    const el = headingEls.current.get(id);
-    if (!container || !el) return;
-    const top = el.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop - 16;
-    container.scrollTo({ top, behavior: 'smooth' });
-    setActiveId(id);
-  };
+  const [activeIdx, setActiveIdx] = useState(0);
 
   if (!entries.length) return null;
 
+  const entry = entries[0];
+  const groups: UCGroup[] = ((entry.use_cases_json as { groups?: UCGroup[] })?.groups) ?? [];
+
+  // Split content_html into per-group sections by matching <section id="GRP-XX">
+  const groupHtmlMap = useMemo(() => {
+    const map = new Map<string, string>();
+    const html = entry.content_html ?? '';
+    const regex = /(<section[^>]+id="(GRP-\d+)"[\s\S]*?<\/section>)/gi;
+    let m: RegExpExecArray | null;
+    while ((m = regex.exec(html)) !== null) {
+      map.set(m[2], m[1]);
+    }
+    return map;
+  }, [entry.content_html]);
+
+  // Fallback: no structured groups — render full HTML
+  if (!groups.length) {
+    return (
+      <div className="glass-card rounded-[3rem] p-12 max-h-[80vh] overflow-y-auto custom-scrollbar shadow-2xl">
+        <div className="prose-cobol" dangerouslySetInnerHTML={{ __html: entry.content_html ?? '' }} />
+      </div>
+    );
+  }
+
+  const activeGroup = groups[activeIdx];
+  const activeHtml = groupHtmlMap.get(activeGroup?.id ?? '') ?? '';
+
   return (
-    <div className="flex gap-6" style={{ height: '75vh' }}>
+    <div className="flex gap-6 min-h-0" style={{ height: '75vh' }}>
       {/* Index */}
       <div className="w-72 flex-shrink-0 flex flex-col glass-card rounded-[2rem] overflow-hidden">
         <div className="px-5 py-4 border-b border-white/5 flex-shrink-0 flex items-center gap-2">
           <span className="material-symbols-outlined text-primary text-base">toc</span>
-          <span className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant opacity-60">Índice</span>
+          <span className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant opacity-60">INDICE</span>
         </div>
         <div className="flex-1 overflow-y-auto custom-scrollbar p-2">
-          {toc.map((item) => (
+          {groups.map((group, i) => (
             <button
-              key={item.id}
-              onClick={() => scrollTo(item.id)}
-              className={`w-full text-left rounded-xl transition-all duration-200 ${
-                activeId === item.id
+              key={group.id}
+              onClick={() => setActiveIdx(i)}
+              className={`w-full text-left px-4 py-3 rounded-xl flex items-start gap-3 transition-all duration-200 ${
+                i === activeIdx
                   ? 'bg-primary-container text-on-primary-container'
                   : 'text-on-surface-variant hover:bg-white/5 hover:text-on-surface'
-              } ${
-                item.level === 2
-                  ? 'px-4 py-2.5 text-xs font-black'
-                  : item.level === 3
-                  ? 'px-6 py-2 text-xs font-semibold'
-                  : 'px-8 py-1.5 text-[11px] font-medium opacity-80'
               }`}
             >
-              {item.text}
+              <span className="text-[10px] font-black opacity-50 mt-0.5 flex-shrink-0 tabular-nums">
+                {group.id}
+              </span>
+              <span className="text-xs font-bold leading-snug tracking-tight">
+                {group.name}
+              </span>
             </button>
           ))}
         </div>
       </div>
 
       {/* Content */}
-      <div
-        ref={containerRef}
-        className="flex-1 glass-card rounded-[2.5rem] px-12 py-10 overflow-y-auto custom-scrollbar"
-      >
-        <div className="prose-cobol" dangerouslySetInnerHTML={{ __html: combinedHtml }} />
+      <div className="flex-1 min-h-0 glass-card rounded-[2.5rem] flex flex-col overflow-hidden">
+        <div className="px-10 py-6 border-b border-white/5 flex-shrink-0">
+          <p className="text-[10px] font-black uppercase tracking-[0.2em] text-on-surface-variant opacity-50 mb-1">
+            {activeGroup?.programs?.join(' · ')}
+          </p>
+          <h2 className="text-xl font-black text-on-surface tracking-tighter">
+            {activeGroup?.name}
+          </h2>
+        </div>
+        <div className="flex-1 overflow-y-auto custom-scrollbar px-10 py-8">
+          {activeHtml ? (
+            <div className="prose-cobol" dangerouslySetInnerHTML={{ __html: activeHtml }} />
+          ) : (
+            <p className="text-sm text-on-surface-variant opacity-50 italic">Sin contenido para este grupo.</p>
+          )}
+        </div>
       </div>
     </div>
   );
