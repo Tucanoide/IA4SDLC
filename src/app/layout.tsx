@@ -76,7 +76,7 @@ export default async function RootLayout({
         <TopNavBar initialMetrics={metrics} />
         <div className="flex flex-1">
           <SideNavBar />
-          <main className="ml-64 flex-1 min-h-screen pt-0 px-10 pb-24 flex flex-col gap-10 relative z-10">
+          <main className="ml-64 flex-1 min-h-screen pt-10 px-10 pb-24 flex flex-col gap-10 relative z-10">
             {children}
           </main>
         </div>
