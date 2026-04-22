@@ -87,35 +87,9 @@ const NAV_NODES = [
   },
 ];
 
-function AsciiMetric({ label, value, subtext }: { label: string; value: string; subtext: string }) {
-  return (
-    <div className="glass-card py-3 px-5 flex flex-col gap-1 items-center text-center rounded-2xl relative overflow-hidden transition-all duration-500 hover:scale-[1.02]">
-      <div className="text-[10px] uppercase tracking-widest text-primary font-bold opacity-80">{label}</div>
-      <div className="text-4xl font-black tracking-tighter text-on-surface">{value}</div>
-      <div className="text-xs text-on-surface-variant font-medium">{subtext}</div>
-      {/* Decorative inner glow */}
-      <div className="absolute top-0 right-0 w-24 h-24 bg-primary/5 blur-3xl rounded-full -mr-12 -mt-12"></div>
-    </div>
-  );
-}
-
-function AsciiProgressMetric({ label, value, percent }: { label: string; value: string; percent: number }) {
-  return (
-    <div className="glass-card py-3 px-5 flex flex-col gap-1 items-center text-center rounded-2xl relative overflow-hidden transition-all duration-500 hover:scale-[1.02]">
-      <div className="text-[10px] uppercase tracking-widest text-primary font-bold opacity-80">{label}</div>
-      <div className="text-4xl font-black tracking-tighter text-on-surface">{value}</div>
-      <div className="w-full bg-white/5 h-1.5 rounded-full overflow-hidden">
-        <div 
-          className="bg-gradient-to-r from-primary to-secondary h-full transition-all duration-1000" 
-          style={{ width: `${percent}%` }}
-        ></div>
-      </div>
-    </div>
-  );
-}
-
 
 export default function HomeClient({ data, error }: Props) {
+
   const router = useRouter();
 
   return (
@@ -131,37 +105,23 @@ export default function HomeClient({ data, error }: Props) {
         </div>
       )}
 
-      {/* Status Row — 4 metrics */}
-      <section className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-4xl mx-auto w-full">
-        <AsciiMetric
-          label="PROG_ANALYZED"
-          value={data ? fmt(data.totalPrograms) : '—'}
-          subtext="VALIDATED_OBJECTS"
-        />
-        <AsciiMetric
-          label="TOTAL_LOC"
-          value={data ? fmt(data.totalLines) : '—'}
-          subtext="SEMANTIC_LINES"
-        />
-        <AsciiProgressMetric
-          label="AUDIT_HEALTH"
-          value="80%"
-          percent={80}
-        />
-      </section>
-
-      {/* AtomD Central Navigator */}
-      <section className="flex flex-col gap-3 relative">
-        {/* The Orbital Timeline is now embedded here */}
-        <div className="glass-card rounded-[3rem] h-[700px] relative overflow-hidden group">
-          <div className="absolute inset-0 bg-gradient-to-b from-primary/5 to-transparent pointer-events-none"></div>
+      {/* AtomD Central Navigator - Main Hero */}
+      <section className="flex flex-col gap-3 relative animate-in fade-in slide-in-from-bottom-10">
+        <div className="glass-card rounded-[4rem] h-[820px] relative overflow-hidden group border-primary/20 shadow-2xl shadow-primary/10">
+          <div className="absolute inset-0 bg-gradient-to-b from-primary/15 via-transparent to-transparent pointer-events-none"></div>
           
+          {/* Subtitle / Context Overlay */}
+          <div className="absolute top-10 left-1/2 -translate-x-1/2 z-20 text-center pointer-events-none">
+            <h2 className="text-[10px] font-black uppercase tracking-[0.4em] text-primary/40 mb-2">Architectural Neural Map</h2>
+            <div className="h-px w-12 bg-primary/20 mx-auto"></div>
+          </div>
+
           {/* Legend Overlay */}
-          <div className="absolute bottom-10 left-10 z-20 flex flex-col gap-3 text-white/20 text-[9px] uppercase tracking-[0.25em] font-bold pointer-events-none group-hover:text-white/40 transition-colors">
-            <div className="flex items-center gap-3">
-              <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-white inline-block"/>COMPLETE</span>
-              <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-white/50 inline-block"/>IN PROGRESS</span>
-              <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-white/20 border border-white/20 inline-block"/>PENDING</span>
+          <div className="absolute bottom-12 left-12 z-20 flex flex-col gap-4 text-white/20 text-[9px] uppercase tracking-[0.25em] font-bold pointer-events-none group-hover:text-white/40 transition-colors">
+            <div className="flex items-center gap-4">
+              <span className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-white shadow-[0_0_10px_rgba(255,255,255,0.5)] inline-block"/>COMPLETE</span>
+              <span className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-white/50 inline-block"/>IN PROGRESS</span>
+              <span className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-white/20 border border-white/20 inline-block"/>PENDING</span>
             </div>
           </div>
 
@@ -174,3 +134,4 @@ export default function HomeClient({ data, error }: Props) {
     </div>
   );
 }
+

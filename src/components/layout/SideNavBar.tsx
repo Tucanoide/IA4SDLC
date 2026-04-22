@@ -19,8 +19,8 @@ export function SideNavBar() {
   const pathname = usePathname();
 
   return (
-    <aside className="fixed left-0 top-16 h-[calc(100vh-4rem)] bg-slate-950/60 backdrop-blur-2xl w-64 border-r border-white/5 flex flex-col z-30">
-      <div className="flex-1 overflow-y-auto px-4 flex flex-col gap-1.5 font-medium text-sm">
+    <aside className="fixed left-0 top-24 h-[calc(100vh-6rem)] bg-slate-950/60 backdrop-blur-2xl w-64 border-r border-white/5 flex flex-col z-30">
+      <div className="flex-1 overflow-y-auto px-4 pt-10 flex flex-col gap-1.5 font-medium text-sm">
         {NAV_ITEMS.map((item) => {
           const isActive = pathname === item.href || 
             (item.href !== '/' && pathname.startsWith(item.href));
