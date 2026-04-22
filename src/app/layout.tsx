@@ -4,7 +4,7 @@ import { TopNavBar } from "@/components/layout/TopNavBar";
 import { SideNavBar } from "@/components/layout/SideNavBar";
 import { ChatBot } from "@/components/layout/ChatBot";
 import { unstable_cache } from "next/cache";
-import prisma from "@/lib/prisma";
+import pool from "@/lib/db";
 import "./globals.css";
 
 const inter = Inter({
@@ -27,16 +27,16 @@ export const metadata: Metadata = {
 const getGlobalMetrics = unstable_cache(
   async () => {
     try {
-      const result: any = await prisma.$queryRaw`
+      const result = await pool.query(`
         SELECT
            COUNT(*)::text AS total_programs,
            SUM(array_length(string_to_array(original_code, E'\n'), 1))::text AS total_lines
         FROM cobol_analysis.programs
         WHERE is_current = true AND original_code IS NOT NULL
-      `;
+      `);
       return {
-        totalPrograms: parseInt(result[0]?.total_programs ?? '0', 10),
-        totalLines: parseInt(result[0]?.total_lines ?? '0', 10),
+        totalPrograms: parseInt(result.rows[0]?.total_programs ?? '0', 10),
+        totalLines: parseInt(result.rows[0]?.total_lines ?? '0', 10),
         health: 80
       };
     } catch (e) {
