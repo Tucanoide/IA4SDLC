@@ -1,9 +1,9 @@
 'use client';
 import React, { useState, useEffect } from 'react';
 
-export function TopNavBar() {
+export function TopNavBar({ initialMetrics }: { initialMetrics?: {totalPrograms: number, totalLines: number, health: number} }) {
   const [time, setTime] = useState('');
-  const [metrics, setMetrics] = useState<{totalPrograms: number, totalLines: number, health: number} | null>(null);
+  const [metrics, setMetrics] = useState(initialMetrics || null);
 
   useEffect(() => {
     const tick = () => {
@@ -14,14 +14,9 @@ export function TopNavBar() {
     };
     tick();
     const id = setInterval(tick, 1000);
-
-    fetch('/api/metrics')
-      .then(res => res.json())
-      .then(data => setMetrics(data))
-      .catch(err => console.error('Error fetching metrics:', err));
-
     return () => clearInterval(id);
   }, []);
+
 
   const fmt = (n: number) =>
     n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M`
