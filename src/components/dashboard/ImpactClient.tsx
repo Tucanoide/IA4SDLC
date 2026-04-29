@@ -130,7 +130,7 @@ function ProgramSelector({ programs, selected, onSelect, disabled }: {
             <span className="text-sm font-bold text-on-surface tracking-tight truncate max-w-[160px]">{selected.program_name}</span>
           </div>
         ) : (
-          <span className="text-on-surface-variant/40 text-sm font-medium">Seleccioná un programa...</span>
+          <span className="text-on-surface-variant/40 text-sm font-medium">Select target object..</span>
         )}
         <span className="material-symbols-outlined text-primary text-xl transition-transform group-hover:translate-y-0.5">expand_more</span>
       </button>
