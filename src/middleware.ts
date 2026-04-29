@@ -12,7 +12,7 @@ async function getSessionToken(password: string): Promise<string> {
     .join('')
 }
 
-export async function proxy(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
   if (pathname.startsWith('/login') || pathname.startsWith('/api/auth')) {
@@ -31,7 +31,12 @@ export async function proxy(request: NextRequest) {
 
   const loginUrl = new URL('/login', request.url)
   if (pathname !== '/') loginUrl.searchParams.set('from', pathname)
-  return NextResponse.redirect(loginUrl)
+  
+  const response = NextResponse.redirect(loginUrl)
+  response.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+  response.headers.set('Pragma', 'no-cache')
+  response.headers.set('Expires', '0')
+  return response
 }
 
 export const config = {
